@@ -2058,7 +2058,9 @@ namespace tui
     std::vector<std::string> screen;
     screen.reserve(height);
 
-    std::lock_guard lock(model.mutex);
+    // Held while the screen is drawn from the model, not while the console takes the frame:
+    // the log thread waits on it for every log
+    std::unique_lock lock(model.mutex);
     auto lines = flatten(model);
     int count = static_cast<int>(lines.size());
 
@@ -2282,6 +2284,7 @@ namespace tui
     Cells bottom(width - 1, BAR_BG);
     drawBottom(bottom);
     screen.push_back(bottom.finish());
+    lock.unlock();
 
     std::string frame = "\x1b[?25l";
     for (size_t i = 0; i < screen.size(); i++)

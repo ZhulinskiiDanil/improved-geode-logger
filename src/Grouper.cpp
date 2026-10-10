@@ -115,12 +115,28 @@ namespace grouper
     return rows;
   }
 
+  // The local time only changes once a second: the clock part is kept, the milliseconds added to it
   static std::string timeOf(log::BorrowedLog const& log, bool millis)
   {
-    auto local = asp::localtime(log.m_time.to_time_t());
-    if (millis)
-      return fmt::format("{:%H:%M:%S}.{:03}", local, log.m_time.timeSinceEpoch().millis() % 1000);
-    return fmt::format("{:%H:%M:%S}", local);
+    static thread_local std::time_t cachedSecond = -1;
+    static thread_local std::string cachedClock;
+
+    auto second = log.m_time.to_time_t();
+    if (second != cachedSecond)
+    {
+      cachedClock = fmt::format("{:%H:%M:%S}", asp::localtime(second));
+      cachedSecond = second;
+    }
+    if (!millis)
+      return cachedClock;
+
+    auto ms = static_cast<int>(log.m_time.timeSinceEpoch().millis() % 1000);
+    std::string time = cachedClock;
+    time += '.';
+    time += static_cast<char>('0' + ms / 100);
+    time += static_cast<char>('0' + ms / 10 % 10);
+    time += static_cast<char>('0' + ms % 10);
+    return time;
   }
 
   // ! --- Printing --- !
@@ -389,20 +405,22 @@ namespace grouper
     if (config->collapse == settings::Collapse::Similar)
       record.pattern = text::withoutNumbers(record.content);
 
-    // The interactive screen keeps every log, also while the stream is on, to have the history ready
+    // Errors pop up in the game too, only from the focused mods when there are some
+    if (record.severity >= config->toastLevel && (config->focusMods.empty() || inList(config->focusMods, log)))
+      devloop::toast(record.source.name, record.severity, record.content);
+
+    // The interactive screen keeps every log, also while the stream is on, to have the history ready.
+    // Only the stream still needs the record after this
+    bool streaming = !tui::isActive();
     {
-      auto shown = record;
+      auto shown = streaming ? record : std::move(record);
       shown.content = text::clean(shown.content);
       auto& model = model::get();
       std::lock_guard lock(model.mutex);
       model.add(std::move(shown), *config);
     }
 
-    // Errors pop up in the game too, only from the focused mods when there are some
-    if (record.severity >= config->toastLevel && (config->focusMods.empty() || inList(config->focusMods, log)))
-      devloop::toast(record.source.name, record.severity, record.content);
-
-    if (tui::isActive())
+    if (!streaming)
       return;
 
     Entry entry{std::move(record), {}};

@@ -216,6 +216,8 @@ namespace devloop
 
   void restart()
   {
+    // A minimized game stops its loop, and with it the main thread's queue: it comes forward first
+    console::showGame();
     Loader::get()->queueInMainThread([]
                                      { game::restart(true); });
   }

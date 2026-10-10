@@ -22,8 +22,19 @@ namespace console
   // so every WriteFile from Geode that lands on a console is one of Geode's lines
   static bool isConsole(HANDLE file)
   {
+    // Geode writes to the same two handles all session long, its console and its log file:
+    // the last answer for each saves two system calls on every log
+    static std::atomic<HANDLE> knownConsole = nullptr;
+    static std::atomic<HANDLE> knownOther = nullptr;
+    if (file == knownConsole.load(std::memory_order::relaxed))
+      return true;
+    if (file == knownOther.load(std::memory_order::relaxed))
+      return false;
+
     DWORD mode;
-    return GetFileType(file) == FILE_TYPE_CHAR && GetConsoleMode(file, &mode);
+    bool console = GetFileType(file) == FILE_TYPE_CHAR && GetConsoleMode(file, &mode);
+    (console ? knownConsole : knownOther).store(file, std::memory_order::relaxed);
+    return console;
   }
 
   static BOOL WINAPI geodeWriteFile(HANDLE file, LPCVOID buffer, DWORD size, LPDWORD written, LPOVERLAPPED overlapped)
