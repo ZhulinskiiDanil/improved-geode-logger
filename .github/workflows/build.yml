@@ -1,0 +1,40 @@
+name: Build
+
+# The mod works with the Windows console only, so it is built for Windows alone.
+# Every push gets a .geode in the run's artifacts, a published release gets it attached
+
+on:
+  push:
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Windows
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the mod
+        id: build
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          target: Win64
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Build Output
+          path: ${{ steps.build.outputs.build-output }}
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "${{ steps.build.outputs.build-output }}"/*.geode --clobber --repo "${{ github.repository }}"
