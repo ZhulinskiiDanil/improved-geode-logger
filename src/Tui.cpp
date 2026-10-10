@@ -43,6 +43,7 @@ namespace tui
   // Logs a second from which a mod counts as noisy in the mods list
   static constexpr double NOISY_RATE = 5.0;
   static constexpr int BANNER_CRASH = 1;
+  static constexpr int BANNER_PROBLEMS = 2;
 
   struct Style
   {
@@ -1025,6 +1026,25 @@ namespace tui
     devloop::dismissCrash();
   }
 
+  static void openLoadProblems()
+  {
+    auto problems = devloop::loadProblems();
+    if (problems.empty())
+    {
+      flash("Every mod loaded");
+      return;
+    }
+
+    std::string text;
+    for (auto const& problem : problems)
+      text += "• " + problem + "\n";
+    s.detailText = std::pair(fmt::format(" {} {} Geode couldn't load fully ", problems.size(), problems.size() == 1 ? "mod" : "mods"), text);
+    s.detailMod.reset();
+    s.details = true;
+    s.detailScroll = 0;
+    devloop::dismissLoadProblems();
+  }
+
   static void closeDetails()
   {
     s.details = false;
@@ -1415,6 +1435,9 @@ namespace tui
     case L'o':
       openCrash();
       break;
+    case L'P':
+      openLoadProblems();
+      break;
     case L'y':
       copySelection();
       break;
@@ -1479,6 +1502,8 @@ namespace tui
         flash("Restarting the game…");
         devloop::restart();
       }
+      else if (s_layout.banners[y - 1] == BANNER_PROBLEMS)
+        openLoadProblems();
       else
         openCrash();
       return;
@@ -1939,6 +1964,7 @@ namespace tui
         "  M                only what came after the last marker",
         "  Shift+R          restart the game, the banner says when a .geode was rebuilt",
         "  o                open the crash log of the last session",
+        "  P                the mods Geode couldn't load, and why",
         "  L                open an older log file of Geode, Esc goes back to live",
         "  v                show or hide the values mods watch through the API",
         "  w / W            save what the filters show to a file / open the folder",
@@ -2051,6 +2077,11 @@ namespace tui
         ids += (ids.empty() ? "" : ", ") + id;
       banners.emplace_back(fmt::format(" ⟳ {} rebuilt · Shift+R or a click restarts the game to load it", ids), 221);
       bannerKinds.push_back(BANNER_REBUILT);
+    }
+    if (auto problems = devloop::loadProblems(); !problems.empty())
+    {
+      banners.emplace_back(fmt::format(" ⚠ {} {} Geode couldn't load fully · P or a click shows why", problems.size(), problems.size() == 1 ? "mod" : "mods"), 221);
+      bannerKinds.push_back(BANNER_PROBLEMS);
     }
     if (auto crash = devloop::lastCrash())
     {

@@ -24,6 +24,7 @@ Download `zhulis.improved-logger.geode` from the [releases](https://github.com/Z
 | `M` | Only what came after the last marker |
 | `Shift+R` | Restart the game, a banner says when a `.geode` was rebuilt (a click on it works too) |
 | `o` | The crash log of the last session (or a click on its banner) |
+| `P` | The mods Geode couldn't load, and why |
 | `L` | An older log file of Geode |
 | `y` `Ctrl+C` right click, `Y` | Copy the log or the group, as Markdown |
 | `E` | Copy every warning and error, by mod, as Markdown |

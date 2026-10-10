@@ -12,6 +12,7 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <regex>
 
 #include <Windows.h>
 
@@ -126,9 +127,62 @@ namespace devloop
   // like a setting a mod update added ("not found in savedata")
   static std::atomic<bool> s_gameLoaded = false;
 
+  // ! --- Load problems --- !
+
+  static std::vector<std::string> s_problems;
+
+  static std::string causeName(LoadProblem const& problem)
+  {
+    if (auto mod = std::get_if<Mod*>(&problem.cause); mod && *mod)
+      return std::string((*mod)->getName());
+    if (auto metadata = std::get_if<ModMetadata>(&problem.cause))
+      return std::string(metadata->getName());
+    if (auto path = std::get_if<std::filesystem::path>(&problem.cause))
+      return path->filename().string();
+    return "A mod";
+  }
+
+  // Geode's messages are made for its popups: "<cy>install</c>", "<mod:geode.node-ids>"
+  static std::string withoutTags(std::string const& message)
+  {
+    static std::regex const colors("</?c[a-z]?>");
+    static std::regex const mods("<mod:([^>]+)>");
+    return std::regex_replace(std::regex_replace(message, colors, ""), mods, "$1");
+  }
+
   $on_game(Loaded)
   {
     s_gameLoaded = true;
+
+    std::vector<std::string> problems;
+    for (auto const& problem : Loader::get()->getLoadProblems())
+    {
+      auto line = fmt::format("{}: {}", causeName(problem), withoutTags(problem.message));
+      // Geode keeps outdated mods out of its own menu, they are here for completeness
+      if (!problem.isProblemTheUserShouldCareAbout())
+        line += " (outdated)";
+      problems.push_back(std::move(line));
+    }
+
+    {
+      std::lock_guard lock(s_mutex);
+      s_problems = problems;
+    }
+
+    if (!problems.empty() && !tui::isActive() && console::isGrouping())
+      grouper::printRule(fmt::format("{} {} Geode couldn't load fully · {}", problems.size(), problems.size() == 1 ? "mod" : "mods", problems.front()), 221);
+  }
+
+  std::vector<std::string> loadProblems()
+  {
+    std::lock_guard lock(s_mutex);
+    return s_problems;
+  }
+
+  void dismissLoadProblems()
+  {
+    std::lock_guard lock(s_mutex);
+    s_problems.clear();
   }
 
   void toast(std::string const& mod, int severity, std::string_view message)

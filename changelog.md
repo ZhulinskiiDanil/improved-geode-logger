@@ -5,6 +5,7 @@
 - Up and Down go through earlier searches while typing one, kept between launches
 - `M` shows only what came after the last marker, and `t` has a time since the marker above
 - The console window's close button is off (a setting): closing it closed the game too, without saving
+- A banner when Geode couldn't load some mods, `P` (or a click) shows why
 - Tests for the folding of repeats, the search and the reading of log files, run in CI
 
 # v1.4.0

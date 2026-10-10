@@ -32,6 +32,11 @@ namespace devloop
     std::string time;
   };
 
+  // Mods Geode couldn't load (missing dependencies, a wrong version...), one line each.
+  // Gathered once the game loaded, until someone looked at them
+  std::vector<std::string> loadProblems();
+  void dismissLoadProblems();
+
   // The crash of the last session, if it ended with one and nobody looked at it yet
   std::optional<Crash> lastCrash();
   void dismissCrash();
