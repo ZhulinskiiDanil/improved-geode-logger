@@ -1967,8 +1967,24 @@ namespace tui
       return;
     }
 
+    // The keys of what has the focus: the mods list, a panel, the picker, the help
+    using Hints = std::vector<std::pair<std::string_view, std::string_view>>;
+    static Hints const help = {{"↑↓ PgDn", "scroll"}, {"any key", "close"}};
+    static Hints const picker = {{"↑↓", "choose"}, {"Enter", "open"}, {"Esc", "back"}};
+    static Hints const text = {{"↑↓ PgUp PgDn", "scroll"}, {"y", "copy all"}, {"Y", "as Markdown"}, {"Esc", "close"}};
+    static Hints const mods = {{"↑↓", "mod"}, {"Space", "hide"}, {"s", "only it"}, {"a", "all"}, {"+ -", "level"},
+                               {"l", "logging"}, {"0", "reset"}, {"Enter", "card"}, {"Esc", "back"}};
+    static Hints const history = {{"↑↓", "move"}, {"/", "search"}, {"Tab", "mods"}, {"L", "another file"}, {"Esc", "back to live"}};
+
+    auto const& keys = s.help                     ? help
+                       : s.picker                 ? picker
+                       : s.details && s.detailText ? text
+                       : s.sidebarFocus           ? mods
+                       : s.historyName            ? history
+                                                  : hints();
+
     row.put(" ", {-1, BAR_BG});
-    for (auto [key, label] : hints())
+    for (auto [key, label] : keys)
     {
       if (row.left() < text::width(key) + text::width(label) + 3)
         break;
