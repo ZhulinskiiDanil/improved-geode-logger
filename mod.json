@@ -1,0 +1,91 @@
+{
+	"geode": "5.10.1",
+	"gd": {
+		"win": "2.2081"
+	},
+	"id": "zhulis.improved-logger",
+	"name": "Improved Logger",
+	"version": "v1.0.0",
+	"developer": "Zhulis",
+	"description": "Groups the console logs by mod, folds repeated lines into one and shows log nesting as a tree",
+	"repository": "https://github.com/ZhulinskiiDanil/improved-geode-logger",
+	"tags": [
+		"developer",
+		"utility"
+	],
+	"settings": {
+		"general-title": {
+			"type": "title",
+			"name": "General",
+			"description": "Changes only the <cb>platform console</c> (turn on <cy>Show Platform Console</c> in Geode's settings). Log files stay exactly as Geode writes them"
+		},
+		"enabled": {
+			"name": "Grouped console",
+			"description": "Off gives the console back to Geode's usual output",
+			"type": "bool",
+			"default": true
+		},
+		"group-by-mod": {
+			"name": "Group by mod",
+			"description": "Logs that come one after another from the same mod go under one header with the mod's name, instead of repeating it on every line",
+			"type": "bool",
+			"default": true
+		},
+		"mod-colors": {
+			"name": "Mod colors",
+			"description": "Each mod gets its own color for its header and the line on the left of its logs",
+			"type": "bool",
+			"default": true
+		},
+		"nest-guides": {
+			"name": "Nesting guides",
+			"description": "Logs written inside <cy>log::NestScope</c> (or between <cy>log::pushNest</c> and <cy>log::popNest</c>) get vertical guides, like a tree",
+			"type": "bool",
+			"default": true
+		},
+		"gap": {
+			"name": "Pause gap",
+			"description": "After this many seconds without logs, the next ones start a new block after an empty line, so bursts (a click, a level load) stand apart. 0 turns it off",
+			"type": "float",
+			"default": 1.5,
+			"min": 0,
+			"max": 10,
+			"control": {
+				"slider": true,
+				"slider-step": 0.5
+			}
+		},
+		"collapse-title": {
+			"type": "title",
+			"name": "Repeated lines"
+		},
+		"collapse": {
+			"name": "Fold repeats",
+			"description": "Identical: the same line written again and again stays one line with a counter. Similar: lines that differ only in numbers fold too (a position every frame, a progress \"3/10\"), the line shows the latest values",
+			"type": "string",
+			"default": "Similar",
+			"one-of": [
+				"Off",
+				"Identical",
+				"Similar"
+			]
+		},
+		"filter-title": {
+			"type": "title",
+			"name": "Filter",
+			"description": "Mods are written by ID or by name, separated by commas, for example <cy>geode.loader, Icon Mayhem</c>"
+		},
+		"focus-mods": {
+			"name": "Focus on mods",
+			"description": "Only these mods show all their logs, the others show just warnings and errors. Empty shows everyone",
+			"type": "string",
+			"default": ""
+		},
+		"muted-mods": {
+			"name": "Muted mods",
+			"description": "These mods show only errors",
+			"type": "string",
+			"default": ""
+		}
+	}
+}
