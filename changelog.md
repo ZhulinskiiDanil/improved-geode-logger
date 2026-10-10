@@ -1,3 +1,12 @@
+# v1.3.0
+
+- An API for other mods (`include/ImprovedLogger.hpp`, no hard dependency): `watch` pins values in a panel of the console that updates in place, `Timer` logs how long code took, `mark` puts a marker from code
+- Smarter search: every word must match, `-word` must not, `"a phrase"`, `mod:`, `thread:`, `level:` and `re:` for a regex, every searched word is marked
+- `L` opens an older log file of Geode in the console, with the same groups, search and filters
+- `w` saves what the filters show to a file, `W` opens the folder, `Y` copies as Markdown
+- `v` shows or hides the watched values
+- Hidden mods, the level, the time format and the panels are kept between launches
+
 # v1.2.0
 
 - Markers: `b` in the console or a keybind in the game (Ctrl+Shift+M) puts a marker line into the logs, to see what got logged after you did something

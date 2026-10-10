@@ -1,6 +1,7 @@
 #include "Tui.hpp"
 #include "Console.hpp"
 #include "DevLoop.hpp"
+#include "History.hpp"
 #include "Look.hpp"
 #include "Model.hpp"
 #include "Settings.hpp"
@@ -9,6 +10,8 @@
 #include <Geode/Geode.hpp>
 #include <atomic>
 #include <chrono>
+#include <regex>
+#include <set>
 #include <thread>
 
 #include <Windows.h>
@@ -217,6 +220,15 @@ namespace tui
 
     TimeMode timeMode = TimeMode::Clock;
 
+    // Mods whose logs are hidden here, by name, kept between launches
+    std::set<std::string> hiddenMods;
+    bool watchPanel = true;
+
+    // An older log file instead of the live logs
+    std::optional<std::string> historyName;
+    std::optional<std::vector<std::filesystem::path>> picker;
+    int pickerIndex = 0;
+
     uint64_t logsAtPause = 0;
     std::string flash;
     std::chrono::steady_clock::time_point flashUntil;
@@ -236,6 +248,14 @@ namespace tui
   static std::vector<LineRef> s_view;
   static std::vector<std::string> s_sidebarMods;
 
+  // The logs being looked at: the live ones, or an older file opened with L
+  static std::unique_ptr<model::Model> s_history;
+
+  static model::Model& viewModel()
+  {
+    return s_history ? *s_history : model::get();
+  }
+
   // Set from other threads when the screen should be drawn again
   static std::atomic<bool> s_wake = false;
   static std::mutex s_cardMutex;
@@ -249,13 +269,170 @@ namespace tui
 
   // ! --- List --- !
 
+  // ! --- Search --- !
+
+  // Words must all be found, in the message or the mod's name: -word must not be there,
+  // "a phrase" keeps its spaces, mod:, thread: and level: look at one thing, re: is a regex
+  struct Term
+  {
+    enum class Field
+    {
+      Text,
+      Mod,
+      Thread,
+      Level,
+      Regex,
+    };
+
+    Field field = Field::Text;
+    bool negate = false;
+    std::string value;
+    int level = 0;
+    std::optional<std::regex> regex;
+  };
+
+  struct Query
+  {
+    std::vector<Term> terms;
+    // The words to mark in the messages
+    std::vector<std::string> marks;
+    bool badRegex = false;
+  };
+
+  static std::vector<std::string> splitQuery(std::string_view text)
+  {
+    std::vector<std::string> words;
+    std::string word;
+    bool quoted = false;
+    for (char c : text)
+    {
+      if (c == '"')
+        quoted = !quoted;
+      else if (c == ' ' && !quoted)
+      {
+        if (!word.empty())
+          words.push_back(std::move(word));
+        word.clear();
+      }
+      else
+        word.push_back(c);
+    }
+    if (!word.empty())
+      words.push_back(std::move(word));
+    return words;
+  }
+
+  static std::optional<int> levelNamed(std::string_view name)
+  {
+    auto lower = string::toLower(std::string(name));
+    if (lower == "trace")
+      return Severity::Trace;
+    if (lower == "debug")
+      return Severity::Debug;
+    if (lower == "info")
+      return Severity::Info;
+    if (lower == "warn" || lower == "warning")
+      return Severity::Warning;
+    if (lower == "error")
+      return Severity::Error;
+    return std::nullopt;
+  }
+
+  static Query parseQuery(std::string_view text)
+  {
+    Query query;
+    for (auto& word : splitQuery(text))
+    {
+      Term term;
+      std::string_view view = word;
+      if (view.size() > 1 && view[0] == '-')
+      {
+        term.negate = true;
+        view.remove_prefix(1);
+      }
+
+      auto field = [&](std::string_view prefix)
+      {
+        if (view.size() <= prefix.size() || !text::containsCaseless(view.substr(0, prefix.size()), prefix))
+          return false;
+        view.remove_prefix(prefix.size());
+        return true;
+      };
+
+      if (field("mod:"))
+        term.field = Term::Field::Mod;
+      else if (field("thread:"))
+        term.field = Term::Field::Thread;
+      else if (field("level:"))
+      {
+        auto level = levelNamed(view);
+        if (!level)
+          continue;
+        term.field = Term::Field::Level;
+        term.level = *level;
+      }
+      else if (field("re:"))
+      {
+        term.field = Term::Field::Regex;
+        try
+        {
+          term.regex.emplace(std::string(view), std::regex::ECMAScript | std::regex::icase);
+        }
+        catch (std::regex_error const&)
+        {
+          query.badRegex = true;
+          continue;
+        }
+      }
+
+      term.value = std::string(view);
+      if (term.field == Term::Field::Text && !term.negate)
+        query.marks.push_back(term.value);
+      query.terms.push_back(std::move(term));
+    }
+    return query;
+  }
+
+  static Query const& query()
+  {
+    static Query cached;
+    static std::string cachedText;
+    if (cachedText != s.search)
+    {
+      cached = parseQuery(s.search);
+      cachedText = s.search;
+    }
+    return cached;
+  }
+
+  static bool matches(Term const& term, Record const& record)
+  {
+    switch (term.field)
+    {
+    case Term::Field::Mod:
+      return text::containsCaseless(record.source.name, term.value) ||
+             (record.source.mod && text::containsCaseless(std::string_view(record.source.mod->getID()), term.value));
+    case Term::Field::Thread:
+      return text::containsCaseless(record.source.thread, term.value);
+    case Term::Field::Level:
+      return record.severity >= term.level;
+    case Term::Field::Regex:
+      return std::regex_search(record.content, *term.regex);
+    default:
+      return text::containsCaseless(record.content, term.value) || text::containsCaseless(record.source.name, term.value);
+    }
+  }
+
   static bool passes(Record const& record)
   {
     if (record.severity < s.minLevel)
       return false;
-    if (s.search.empty())
-      return true;
-    return text::containsCaseless(record.content, s.search) || text::containsCaseless(record.source.name, s.search);
+    for (auto const& term : query().terms)
+    {
+      if (matches(term, record) == term.negate)
+        return false;
+    }
+    return true;
   }
 
   static bool filtering()
@@ -268,8 +445,7 @@ namespace tui
     std::vector<Line> lines;
     for (auto& group : model.groups)
     {
-      auto stats = model.modStats(group.source.name);
-      if (stats && stats->hidden)
+      if (s.hiddenMods.contains(group.source.name))
         continue;
 
       auto start = lines.size();
@@ -331,7 +507,7 @@ namespace tui
     if (!s.follow)
       return;
     s.follow = false;
-    s.logsAtPause = model::get().logs;
+    s.logsAtPause = viewModel().logs;
     if (!s_view.empty())
     {
       s.selected = s_view.back();
@@ -408,7 +584,7 @@ namespace tui
 
   static void setCollapsed(LineRef ref, std::optional<bool> collapsed)
   {
-    auto& model = model::get();
+    auto& model = viewModel();
     std::lock_guard lock(model.mutex);
     if (auto group = findGroup(model, ref.group))
     {
@@ -420,7 +596,7 @@ namespace tui
 
   static void setAllCollapsed(bool collapsed)
   {
-    auto& model = model::get();
+    auto& model = viewModel();
     std::lock_guard lock(model.mutex);
     for (auto& group : model.groups)
       group.collapsed = collapsed;
@@ -453,51 +629,209 @@ namespace tui
     CloseClipboard();
   }
 
-  static void copySelection()
+  static void closeDetails();
+
+  // Markdown wraps it in a code block with the mod's name, ready for a bug report
+  static void copySelection(bool markdown = false)
   {
     if (s.details && s.detailText)
     {
-      copyToClipboard(s.detailText->second);
+      copyToClipboard(markdown ? fmt::format("```\n{}\n```", s.detailText->second) : s.detailText->second);
       flash("Copied the whole text");
       return;
     }
 
-    auto& model = model::get();
+    auto& model = viewModel();
     std::string text;
+    std::string heading;
     int lines = 0;
     {
       std::lock_guard lock(model.mutex);
       auto line = selectedLine(flatten(model));
       if (!line)
         return;
+
+      auto const& group = *line->group;
+      auto modID = group.source.mod ? std::string(group.source.mod->getID()) : std::string();
       if (line->row)
       {
-        text = formatRow(*line->group, *line->row);
+        text = formatRow(group, *line->row) + "\n";
         lines = 1;
       }
       else
       {
-        for (auto const& row : line->group->rows)
+        for (auto const& row : group.rows)
         {
           if (!passes(row.record))
             continue;
-          text += formatRow(*line->group, row) + "\n";
+          text += formatRow(group, row) + "\n";
           lines++;
         }
       }
+      heading = modID.empty() ? fmt::format("**{}**", group.source.name) : fmt::format("**{}** (`{}`)", group.source.name, modID);
+      heading += fmt::format(" · {} {}", lines, lines == 1 ? "log" : "logs");
     }
+
+    if (markdown)
+      text = fmt::format("{}\n```\n{}```", heading, text);
+    else if (!text.empty())
+      text.pop_back();
     copyToClipboard(text);
-    flash(lines == 1 ? "Copied the log" : fmt::format("Copied {} logs", lines));
+    flash(fmt::format("Copied {}{}", lines == 1 ? std::string("the log") : fmt::format("{} logs", lines), markdown ? " as Markdown" : ""));
+  }
+
+  static std::filesystem::path exportsDir()
+  {
+    return Mod::get()->getSaveDir() / "exports";
+  }
+
+  // Everything the filters let through, folded groups too, in Geode's own format
+  static void exportView()
+  {
+    auto& model = viewModel();
+    std::string text;
+    int logs = 0;
+    {
+      std::lock_guard lock(model.mutex);
+      for (auto const& group : model.groups)
+      {
+        if (s.hiddenMods.contains(group.source.name))
+          continue;
+        if (group.marker)
+        {
+          text += fmt::format("──── {} · {} ────\n", group.rows.front().record.content, group.rows.front().record.time);
+          continue;
+        }
+        for (auto const& row : group.rows)
+        {
+          if (!passes(row.record))
+            continue;
+          text += formatRow(group, row) + "\n";
+          logs++;
+        }
+      }
+    }
+
+    std::error_code error;
+    std::filesystem::create_directories(exportsDir(), error);
+    auto now = asp::localtime(asp::SystemTime::now().to_time_t());
+    auto path = exportsDir() / fmt::format("{} {:%Y-%m-%d %H.%M.%S}.log", s.historyName ? "old log" : "logs", now);
+    if (auto result = file::writeString(path, text); !result)
+    {
+      flash(fmt::format("Can't save: {}", result.unwrapErr()));
+      return;
+    }
+    flash(fmt::format("Saved {} logs to {} · W opens the folder", logs, path.filename().string()));
+  }
+
+  // ! --- Older logs --- !
+
+  static void openPicker()
+  {
+    s.picker = history::files();
+    s.pickerIndex = 0;
+    if (s.picker->empty())
+    {
+      s.picker.reset();
+      flash("No older log files");
+    }
+  }
+
+  static void openHistory(std::filesystem::path const& path)
+  {
+    auto config = settings::get();
+    s_history = history::load(path, *config);
+    s.historyName = path.filename().string();
+    s.picker.reset();
+    closeDetails();
+    s.follow = false;
+    s.selected.reset();
+    s.top.reset();
+    s.selectedIndex = 0;
+    s_layout.top = 0;
+    flash(fmt::format("{} logs from {}", s_history->logs, *s.historyName));
+  }
+
+  static void closeHistory()
+  {
+    s_history.reset();
+    s.historyName.reset();
+    closeDetails();
+    s.selected.reset();
+    s.top.reset();
+    s.follow = true;
+  }
+
+  static void onPickerKey(KEY_EVENT_RECORD const& key, wchar_t c)
+  {
+    int count = static_cast<int>(s.picker->size());
+    int page = std::max(1, s_layout.listRows - 2);
+    switch (key.wVirtualKeyCode)
+    {
+    case VK_UP:
+      s.pickerIndex = std::max(0, s.pickerIndex - 1);
+      return;
+    case VK_DOWN:
+      s.pickerIndex = std::min(count - 1, s.pickerIndex + 1);
+      return;
+    case VK_PRIOR:
+      s.pickerIndex = std::max(0, s.pickerIndex - page);
+      return;
+    case VK_NEXT:
+      s.pickerIndex = std::min(count - 1, s.pickerIndex + page);
+      return;
+    case VK_RETURN:
+      openHistory((*s.picker)[s.pickerIndex]);
+      return;
+    case VK_ESCAPE:
+      s.picker.reset();
+      return;
+    default:
+      break;
+    }
+    if (c == L'k')
+      s.pickerIndex = std::max(0, s.pickerIndex - 1);
+    else if (c == L'j')
+      s.pickerIndex = std::min(count - 1, s.pickerIndex + 1);
+    else if (c == L'L' || c == L'q')
+      s.picker.reset();
+  }
+
+  // ! --- Saved between launches --- !
+
+  static void loadState()
+  {
+    auto mod = Mod::get();
+    s.minLevel = std::clamp(mod->getSavedValue<int>("ui-level", Severity::Trace), static_cast<int>(Severity::Trace), static_cast<int>(Severity::Error));
+    s.timeMode = static_cast<TimeMode>(std::clamp(mod->getSavedValue<int>("ui-time", 0), 0, 2));
+    s.sidebar = mod->getSavedValue<bool>("ui-sidebar", false);
+    s.watchPanel = mod->getSavedValue<bool>("ui-watches", true);
+    for (auto const& name : mod->getSavedValue<std::vector<std::string>>("ui-hidden", {}))
+      s.hiddenMods.insert(name);
+  }
+
+  // Saved values belong to the main thread
+  static void saveState()
+  {
+    Loader::get()->queueInMainThread([level = s.minLevel, time = static_cast<int>(s.timeMode), sidebar = s.sidebar,
+                                      watches = s.watchPanel, hidden = std::vector<std::string>(s.hiddenMods.begin(), s.hiddenMods.end())]
+                                     {
+      auto mod = Mod::get();
+      mod->setSavedValue("ui-level", level);
+      mod->setSavedValue("ui-time", time);
+      mod->setSavedValue("ui-sidebar", sidebar);
+      mod->setSavedValue("ui-watches", watches);
+      mod->setSavedValue("ui-hidden", hidden); });
   }
 
   static void toggleMod(int index)
   {
     if (index < 0 || index >= static_cast<int>(s_sidebarMods.size()))
       return;
-    auto& model = model::get();
-    std::lock_guard lock(model.mutex);
-    if (auto stats = model.modStats(s_sidebarMods[index]))
-      stats->hidden = !stats->hidden;
+    auto const& name = s_sidebarMods[index];
+    if (!s.hiddenMods.erase(name))
+      s.hiddenMods.insert(name);
+    saveState();
   }
 
   // Only this mod, or everyone again when it already was the only one
@@ -505,28 +839,32 @@ namespace tui
   {
     if (index < 0 || index >= static_cast<int>(s_sidebarMods.size()))
       return;
-    auto& model = model::get();
-    std::lock_guard lock(model.mutex);
-    auto const& name = s_sidebarMods[index];
-    bool alone = std::ranges::all_of(model.mods, [&](auto const& mod)
-                                     { return mod.hidden == (mod.name != name); });
-    for (auto& mod : model.mods)
-      mod.hidden = !alone && mod.name != name;
+    auto name = s_sidebarMods[index];
+    bool alone = !s.hiddenMods.contains(name) && std::ranges::all_of(s_sidebarMods, [&](auto const& other)
+                                                                     { return other == name || s.hiddenMods.contains(other); });
+    s.hiddenMods.clear();
+    if (!alone)
+    {
+      for (auto const& other : s_sidebarMods)
+      {
+        if (other != name)
+          s.hiddenMods.insert(other);
+      }
+    }
+    saveState();
     flash(alone ? "Showing every mod" : fmt::format("Showing only {}", name));
   }
 
   static void showAllMods()
   {
-    auto& model = model::get();
-    std::lock_guard lock(model.mutex);
-    for (auto& mod : model.mods)
-      mod.hidden = false;
+    s.hiddenMods.clear();
+    saveState();
     flash("Showing every mod");
   }
 
   static void clearLogs()
   {
-    auto& model = model::get();
+    auto& model = viewModel();
     std::lock_guard lock(model.mutex);
     model.clear();
     follow();
@@ -539,7 +877,7 @@ namespace tui
   // The next line down (or up) that is a warning, an error or a marker, or the next group
   static void jump(int direction, bool groups)
   {
-    auto& model = model::get();
+    auto& model = viewModel();
     std::lock_guard lock(model.mutex);
     auto lines = flatten(model);
     int count = static_cast<int>(lines.size());
@@ -589,6 +927,7 @@ namespace tui
                  : s.timeMode == TimeMode::SincePrevious ? TimeMode::SinceGroup
                                                          : TimeMode::Clock;
     flash(fmt::format("Time: {}", timeModeName(s.timeMode)));
+    saveState();
   }
 
   static std::optional<std::string> sidebarModName()
@@ -600,7 +939,7 @@ namespace tui
 
   static Mod* modNamed(std::string const& name)
   {
-    auto& model = model::get();
+    auto& model = viewModel();
     std::lock_guard lock(model.mutex);
     auto stats = model.modStats(name);
     return stats ? stats->mod : nullptr;
@@ -854,6 +1193,12 @@ namespace tui
       return;
     }
 
+    if (s.picker)
+    {
+      onPickerKey(key, c);
+      return;
+    }
+
     if (s.sidebarFocus)
     {
       onSidebarKey(key, c);
@@ -948,7 +1293,11 @@ namespace tui
         setCollapsed(*s.selected, false);
       return;
     case VK_TAB:
-      s.sidebar = true;
+      if (!s.sidebar)
+      {
+        s.sidebar = true;
+        saveState();
+      }
       s.sidebarFocus = true;
       return;
     case VK_ESCAPE:
@@ -957,7 +1306,12 @@ namespace tui
       else if (!s.search.empty())
         s.search.clear();
       else if (s.minLevel > Severity::Trace)
+      {
         s.minLevel = Severity::Trace;
+        saveState();
+      }
+      else if (s.historyName)
+        closeHistory();
       else if (!s.follow)
         follow();
       return;
@@ -990,10 +1344,12 @@ namespace tui
     case L'5':
       s.minLevel = Severity::Trace + (c - L'1');
       flash(fmt::format("Showing {} and above", levelName(s.minLevel)));
+      saveState();
       break;
     case L'm':
       s.sidebar = !s.sidebar;
       s.sidebarFocus = false;
+      saveState();
       break;
     case L'c':
       setAllCollapsed(true);
@@ -1042,6 +1398,27 @@ namespace tui
       break;
     case L'y':
       copySelection();
+      break;
+    case L'Y':
+      copySelection(true);
+      break;
+    case L'w':
+      exportView();
+      break;
+    case L'W':
+    {
+      std::error_code error;
+      std::filesystem::create_directories(exportsDir(), error);
+      file::openFolder(exportsDir());
+      break;
+    }
+    case L'L':
+      openPicker();
+      break;
+    case L'v':
+      s.watchPanel = !s.watchPanel;
+      flash(s.watchPanel ? "Watched values shown" : "Watched values hidden");
+      saveState();
       break;
     case L'x':
       clearLogs();
@@ -1142,14 +1519,17 @@ namespace tui
     if (!s.search.empty())
       row.put(fmt::format("   │  search \"{}\"", s.search), {KEY_FG, BAR_BG});
 
-    int hidden = static_cast<int>(std::ranges::count_if(model.mods, [](auto const& mod)
-                                                        { return mod.hidden; }));
+    int hidden = static_cast<int>(s.hiddenMods.size());
+    if (query().badRegex)
+      row.put("   │  bad regex", {ERROR_COLOR, BAR_BG, true});
     if (hidden)
       row.put(fmt::format("   │  {} hidden", hidden), {KEY_FG, BAR_BG});
     if (s.timeMode != TimeMode::Clock)
       row.put(fmt::format("   │  time {}", timeModeName(s.timeMode)), {KEY_FG, BAR_BG});
 
-    if (s.follow)
+    if (s.historyName)
+      row.right(fmt::format("◀ {} · Esc back to live ", *s.historyName), {PAUSED, BAR_BG, true});
+    else if (s.follow)
       row.right("● LIVE ", {LIVE, BAR_BG, true});
     else
     {
@@ -1233,7 +1613,8 @@ namespace tui
   // The message with every match of the search marked
   static void putMarked(Cells& row, std::string_view message, Style style, int reserve)
   {
-    if (s.search.empty())
+    auto const& marks = query().marks;
+    if (marks.empty())
     {
       row.put(message, style, reserve);
       return;
@@ -1242,13 +1623,16 @@ namespace tui
     size_t from = 0;
     while (from < message.size() && row.left() > reserve)
     {
+      // The nearest of the searched words
       size_t found = std::string_view::npos;
-      for (size_t i = from; i + s.search.size() <= message.size(); i++)
+      size_t length = 0;
+      for (auto const& mark : marks)
       {
-        if (text::containsCaseless(message.substr(i, s.search.size()), s.search))
+        auto at = text::findCaseless(message, mark, from);
+        if (at < found && !mark.empty())
         {
-          found = i;
-          break;
+          found = at;
+          length = mark.size();
         }
       }
       if (found == std::string_view::npos)
@@ -1257,8 +1641,8 @@ namespace tui
         return;
       }
       row.put(message.substr(from, found - from), style, reserve);
-      row.put(message.substr(found, s.search.size()), {MATCH_FG, MATCH_BG, true}, reserve);
-      from = found + s.search.size();
+      row.put(message.substr(found, length), {MATCH_FG, MATCH_BG, true}, reserve);
+      from = found + length;
     }
   }
 
@@ -1319,7 +1703,8 @@ namespace tui
 
     bool selected = s.sidebarFocus && index == s.sidebarIndex;
     int bg = selected ? SELECT_BG : -1;
-    row.put(stats->hidden ? " ○ " : " ● ", {stats->hidden ? DIM : stats->color, bg});
+    bool hidden = s.hiddenMods.contains(stats->name);
+    row.put(hidden ? " ○ " : " ● ", {hidden ? DIM : stats->color, bg});
 
     // The mod's own log level, changed with + and -
     std::string level;
@@ -1333,7 +1718,7 @@ namespace tui
       level = std::string(levelName(stats->mod->getLogLevel()).substr(0, 1)) + " ";
 
     auto count = compact(stats->logs);
-    int nameColor = stats->hidden ? DIM : stats->errors ? ERROR_COLOR : stats->warnings ? WARNING_COLOR : 252;
+    int nameColor = hidden ? DIM : stats->errors ? ERROR_COLOR : stats->warnings ? WARNING_COLOR : 252;
     int tail = text::width(count) + text::width(level) + 1;
     row.put(stats->name, {nameColor, bg}, tail + 1);
     row.pad(row.used() + row.left() - tail, {-1, bg});
@@ -1356,6 +1741,8 @@ namespace tui
         {"f", "pause"},
         {"y", "copy"},
         {"?", "help"},
+        {"L", "old logs"},
+        {"w", "save"},
         {"c e", "fold all"},
         {"x", "clear"},
     };
@@ -1389,6 +1776,53 @@ namespace tui
     }
   }
 
+  // "now", "3s ago", "2m ago"
+  static std::string ago(int64_t millis)
+  {
+    if (millis < 1000)
+      return "now";
+    if (millis < 60000)
+      return fmt::format("{}s ago", millis / 1000);
+    return fmt::format("{}m ago", millis / 60000);
+  }
+
+  static void drawWatch(Cells& row, model::Watch const& watch, int64_t now)
+  {
+    auto age = fmt::format("×{} · {} ", watch.updates, ago(now - watch.millis));
+    row.put("  ● ", {watch.color});
+    row.put(watch.modName + "  ", {watch.color, -1, true});
+    row.put(watch.name, {252, -1, true});
+    row.put(" = ", {DIM});
+    row.put(watch.value, {255}, text::width(age) + 2);
+    row.right(age, {DIM});
+  }
+
+  static void drawPickerRow(Cells& row, int listRow)
+  {
+    if (listRow == 0)
+    {
+      row.put("  OLDER LOGS", {KEY_FG, -1, true});
+      row.put("  ↑↓ choose · Enter opens · Esc back", {DIM});
+      return;
+    }
+
+    // Keeps the chosen file on the screen
+    int rows = std::max(1, s_layout.listRows - 1);
+    int top = std::max(0, s.pickerIndex - rows + 1);
+    int index = top + listRow - 1;
+    if (index >= static_cast<int>(s.picker->size()))
+      return;
+
+    auto const& path = (*s.picker)[index];
+    bool selected = index == s.pickerIndex;
+    int bg = selected ? SELECT_BG : -1;
+    std::error_code error;
+    auto size = std::filesystem::file_size(path, error);
+    row.put(selected ? "  ▸ " : "    ", {KEY_FG, bg, true});
+    row.put(path.filename().string(), {selected ? 255 : 252, bg, selected});
+    row.right(fmt::format("{} KB ", (size + 1023) / 1024), {DIM, bg});
+  }
+
   static std::vector<std::string> helpLines()
   {
     return {
@@ -1401,7 +1835,8 @@ namespace tui
         "  Space  ← →       fold or unfold a group",
         "  Enter            fold a group, or open a log in full",
         "  c / e            fold / unfold every group",
-        "  /                search as you type, Esc clears it",
+        "  /                search as you type, Esc clears it. Words must all match,",
+        "                   -word must not, \"a phrase\", mod:name thread:name level:warn re:regex",
         "  1 2 3 4 5        show from TRACE, DEBUG, INFO, WARN or ERROR",
         "  Tab  m           the mods list: Space hides a mod, s shows only it, a all",
         "  y  Ctrl+C        copy the log, or the whole group on its header",
@@ -1418,6 +1853,10 @@ namespace tui
         "  t                time: clock, since the log before, since the group's start",
         "  Shift+R          restart the game, the banner says when a .geode was rebuilt",
         "  o                open the crash log of the last session",
+        "  L                open an older log file of Geode, Esc goes back to live",
+        "  v                show or hide the values mods watch through the API",
+        "  w / W            save what the filters show to a file / open the folder",
+        "  Y                copy as Markdown, for a bug report",
         "",
         "  MODS LIST",
         "",
@@ -1496,7 +1935,7 @@ namespace tui
   static void render()
   {
     auto config = settings::get();
-    auto& model = model::get();
+    auto& model = viewModel();
 
     int height = std::max(console::windowRows(), 4);
     int width = std::max(console::windowColumns(), 20);
@@ -1540,7 +1979,14 @@ namespace tui
       s.detailScroll = std::clamp(s.detailScroll, 0, std::max(0, static_cast<int>(details.size()) - shown));
       details.erase(details.begin(), details.begin() + s.detailScroll);
     }
-    int listRows = std::max(1, body - detailRows);
+    // Watched values sit between the list and the details
+    std::vector<model::Watch> watches;
+    if (s.watchPanel && !s.help && !s.historyName)
+      watches = model::get().watches;
+    int watchRows = watches.empty() ? 0 : std::min(static_cast<int>(watches.size()), 8) + 1;
+    watchRows = std::min(watchRows, std::max(0, body - detailRows - 3));
+
+    int listRows = std::max(1, body - detailRows - watchRows);
 
     // Where the list starts: the end while live, around the selection otherwise
     int top = 0;
@@ -1628,7 +2074,9 @@ namespace tui
       }
 
       Cells main(width - sidebarWidth);
-      if (s.help)
+      if (s.picker && !s.help)
+        drawPickerRow(main, i);
+      else if (s.help)
       {
         if (i < static_cast<int>(help.size()))
         {
@@ -1652,6 +2100,26 @@ namespace tui
         main.put(filtering() ? "  Nothing matches. Esc clears the search and the level" : "  No logs yet", {DIM});
       row += main.finish();
       screen.push_back(std::move(row));
+    }
+
+    if (watchRows)
+    {
+      Cells head(width);
+      head.put("── WATCHING ", {KEY_FG, -1, true});
+      head.put(fmt::format("{} values · v hides ", watches.size()), {DIM});
+      std::string rule;
+      for (int i = 0; i < head.left(); i++)
+        rule += "─";
+      head.put(rule, {BORDER});
+      screen.push_back(head.finish());
+
+      auto now = static_cast<int64_t>(asp::SystemTime::now().timeSinceEpoch().millis());
+      for (int i = 0; i < watchRows - 1; i++)
+      {
+        Cells row(width);
+        drawWatch(row, watches[i], now);
+        screen.push_back(row.finish());
+      }
     }
 
     if (detailRows)
@@ -1801,6 +2269,9 @@ namespace tui
 
       auto revision = model::get().revision.load(std::memory_order::relaxed);
       auto now = std::chrono::steady_clock::now();
+      // "3s ago" and logs per second move without new logs
+      if (now - lastFrame >= std::chrono::seconds(1))
+        s_dirty = true;
       if ((s_dirty || revision != drawnRevision) && now - lastFrame >= FRAME_TIME)
       {
         render();
@@ -1815,6 +2286,7 @@ namespace tui
   {
     if (s_started.exchange(true))
       return;
+    loadState();
     std::thread(run).detach();
   }
 

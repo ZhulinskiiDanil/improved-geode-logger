@@ -24,6 +24,8 @@ namespace text
   std::string clean(std::string_view content);
 
   bool containsCaseless(std::string_view text, std::string_view part);
+  // Where the part starts in the text from `from` on, ignoring case, or npos
+  size_t findCaseless(std::string_view text, std::string_view part, size_t from = 0);
 
   // A steady color for a mod, from a set that reads well on a dark console
   int colorFor(std::string_view key);

@@ -5,12 +5,17 @@
 	},
 	"id": "zhulis.improved-logger",
 	"name": "Improved Logger",
-	"version": "v1.2.0",
+	"version": "v1.3.0",
 	"developer": "Zhulis",
 	"early-load": true,
 	"load-priority": "first",
 	"description": "An interactive console for the logs: groups by mod, folds repeats, search, level and mod filters",
 	"repository": "https://github.com/ZhulinskiiDanil/improved-geode-logger",
+	"api": {
+		"include": [
+			"include/*.hpp"
+		]
+	},
 	"tags": [
 		"developer",
 		"utility"

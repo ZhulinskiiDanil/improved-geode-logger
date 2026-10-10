@@ -29,7 +29,7 @@ namespace devloop
 
   // ! --- Markers --- !
 
-  void addMarker()
+  void addMarker(std::string const& label, std::string const& from)
   {
     auto config = settings::get();
     if (!console::isGrouping())
@@ -51,7 +51,10 @@ namespace devloop
     {
       auto& model = model::get();
       std::lock_guard lock(model.mutex);
+      // "Mark 3", or "Mark 3 · Icon Mayhem: level started" from a mod
       marker.content = fmt::format("Mark {}", model.markers + 1);
+      if (!label.empty() || !from.empty())
+        marker.content += fmt::format(" · {}{}{}", from, !from.empty() && !label.empty() ? ": " : "", label);
       model.addMarker(marker);
     }
 

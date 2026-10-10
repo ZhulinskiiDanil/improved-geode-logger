@@ -91,10 +91,10 @@ namespace model
 
   void Model::add(Record record, settings::Config const& config)
   {
-    auto now = std::chrono::steady_clock::now();
-    bool pause = config.gapSeconds > 0 && m_lastTime &&
-                 now - *m_lastTime >= std::chrono::duration<double>(config.gapSeconds);
-    m_lastTime = now;
+    // The logs' own times, so an old log file read back gets the same groups
+    bool pause = config.gapSeconds > 0 && m_lastMillis &&
+                 record.millis - *m_lastMillis >= static_cast<int64_t>(config.gapSeconds * 1000);
+    m_lastMillis = record.millis;
 
     int severity = record.severity;
     severityCounts[std::clamp(severity - Severity::Trace, 0, 4)]++;
@@ -158,7 +158,32 @@ namespace model
     m_cycle.reset();
     m_floor = 0;
     // The logs after a marker start a new group even without a pause
-    m_lastTime.reset();
+    m_lastMillis.reset();
+    revision.fetch_add(1, std::memory_order::relaxed);
+  }
+
+  void Model::setWatch(Watch watch)
+  {
+    auto it = std::ranges::find_if(watches, [&](auto const& known)
+                                   { return known.modID == watch.modID && known.name == watch.name; });
+    if (it == watches.end())
+    {
+      watch.updates = 1;
+      watches.push_back(std::move(watch));
+    }
+    else
+    {
+      it->value = std::move(watch.value);
+      it->millis = watch.millis;
+      it->updates++;
+    }
+    revision.fetch_add(1, std::memory_order::relaxed);
+  }
+
+  void Model::removeWatch(std::string const& modID, std::string const& name)
+  {
+    std::erase_if(watches, [&](auto const& watch)
+                  { return watch.modID == modID && (name.empty() || watch.name == name); });
     revision.fetch_add(1, std::memory_order::relaxed);
   }
 
@@ -197,6 +222,7 @@ namespace model
     logs = 0;
     markers = 0;
     m_rows = 0;
+    m_lastMillis.reset();
     m_cycle.reset();
     m_floor = 0;
     revision.fetch_add(1, std::memory_order::relaxed);

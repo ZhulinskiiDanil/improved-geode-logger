@@ -185,21 +185,24 @@ namespace text
     return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
   }
 
-  bool containsCaseless(std::string_view text, std::string_view part)
+  size_t findCaseless(std::string_view text, std::string_view part, size_t from)
   {
     if (part.empty())
-      return true;
-    if (part.size() > text.size())
-      return false;
-    for (size_t i = 0; i + part.size() <= text.size(); i++)
+      return from <= text.size() ? from : std::string_view::npos;
+    for (size_t i = from; i + part.size() <= text.size(); i++)
     {
       size_t k = 0;
       while (k < part.size() && lower(text[i + k]) == lower(part[k]))
         k++;
       if (k == part.size())
-        return true;
+        return i;
     }
-    return false;
+    return std::string_view::npos;
+  }
+
+  bool containsCaseless(std::string_view text, std::string_view part)
+  {
+    return findCaseless(text, part) != std::string_view::npos;
   }
 
   std::vector<std::string_view> splitLines(std::string_view content)

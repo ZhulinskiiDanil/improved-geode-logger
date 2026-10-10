@@ -10,8 +10,8 @@ namespace devloop
   // Remembers the builds in the mods folder and looks for the last crash. On the main thread, at load
   void start();
 
-  // A marker line in the logs, from the console or the game's keybind, from any thread
-  void addMarker();
+  // A marker line in the logs, from the console, the game's keybind or another mod, from any thread
+  void addMarker(std::string const& label = "", std::string const& from = "");
 
   // Looks for builds that changed since the game started, about once a second
   void poll();

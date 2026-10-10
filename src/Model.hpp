@@ -52,7 +52,6 @@ namespace model
     int logs = 0;
     int warnings = 0;
     int errors = 0;
-    bool hidden = false;
 
     // Logs in each of the last seconds, by second since the epoch
     int recent[RATE_SECONDS] = {};
@@ -61,6 +60,18 @@ namespace model
     void count(int64_t millis);
     // Logs per second over the last RATE_SECONDS seconds
     double rate(int64_t nowMillis) const;
+  };
+
+  // A value a mod pins in the console through the API, instead of logging it again and again
+  struct Watch
+  {
+    std::string modID;
+    std::string modName;
+    int color = 245;
+    std::string name;
+    std::string value;
+    int64_t millis = 0;
+    int updates = 0;
   };
 
   struct Model
@@ -73,9 +84,12 @@ namespace model
     int severityCounts[5] = {};
     uint64_t logs = 0;
     int markers = 0;
+    std::vector<Watch> watches;
 
     void add(Record record, settings::Config const& config);
     void addMarker(Record marker);
+    void setWatch(Watch watch);
+    void removeWatch(std::string const& modID, std::string const& name);
     void clear();
     ModStats* modStats(std::string const& name);
 
@@ -99,7 +113,8 @@ namespace model
     uint64_t m_nextGroup = 1;
     size_t m_rows = 0;
     std::unordered_map<std::string, size_t> m_modIndex;
-    std::optional<std::chrono::steady_clock::time_point> m_lastTime;
+    // Time of the last log, pauses are measured between the logs' own times
+    std::optional<int64_t> m_lastMillis;
   };
 
   Model& get();
