@@ -1,5 +1,6 @@
 #include "Grouper.hpp"
 #include "Console.hpp"
+#include "DevLoop.hpp"
 #include "Look.hpp"
 #include "Model.hpp"
 #include "Settings.hpp"
@@ -383,6 +384,10 @@ namespace grouper
       std::lock_guard lock(model.mutex);
       model.add(std::move(shown), *config);
     }
+
+    // Errors pop up in the game too, only from the focused mods when there are some
+    if (record.severity >= config->toastLevel && (config->focusMods.empty() || inList(config->focusMods, log)))
+      devloop::toast(record.source.name, record.severity, record.content);
 
     if (tui::isActive())
       return;

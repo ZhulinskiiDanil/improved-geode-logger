@@ -21,6 +21,10 @@ namespace devloop
 
   void restart();
 
+  // A notification in the game for an error, so it isn't missed behind the game window.
+  // At most one every few seconds, the ones in between are counted into the next
+  void toast(std::string const& mod, int severity, std::string_view message);
+
   struct Crash
   {
     std::string path;

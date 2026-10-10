@@ -3,6 +3,7 @@
 #include "Grouper.hpp"
 #include "Model.hpp"
 #include "Settings.hpp"
+#include "Text.hpp"
 #include "Tui.hpp"
 
 #include <Geode/Geode.hpp>
@@ -114,6 +115,38 @@ namespace devloop
   {
     std::lock_guard lock(s_mutex);
     return s_updated;
+  }
+
+  // ! --- Toasts --- !
+
+  static constexpr auto TOAST_GAP = std::chrono::seconds(3);
+  static std::optional<std::chrono::steady_clock::time_point> s_lastToast;
+  static int s_skippedToasts = 0;
+
+  void toast(std::string const& mod, int severity, std::string_view message)
+  {
+    std::string text;
+    {
+      std::lock_guard lock(s_mutex);
+      auto now = std::chrono::steady_clock::now();
+      if (s_lastToast && now - *s_lastToast < TOAST_GAP)
+      {
+        s_skippedToasts++;
+        return;
+      }
+      s_lastToast = now;
+
+      // The first line, short enough for the notification
+      auto line = text::splitLines(message).front();
+      auto shown = text::fit(line, 70);
+      text = fmt::format("{}: {}{}", mod, shown, shown.size() < line.size() ? "..." : "");
+      if (s_skippedToasts)
+        text += fmt::format(" (+{} more)", s_skippedToasts);
+      s_skippedToasts = 0;
+    }
+
+    Loader::get()->queueInMainThread([text = std::move(text), severity]
+                                     { Notification::create(text, severity >= Severity::Error ? NotificationIcon::Error : NotificationIcon::Warning, NOTIFICATION_LONG_TIME)->show(); });
   }
 
   void restart()

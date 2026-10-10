@@ -21,6 +21,8 @@ namespace settings
     bool groupByMod = true;
     bool modColors = true;
     bool nestGuides = true;
+    // Logs from this level up pop up in the game, above Error means never
+    int toastLevel = 3;
     double gapSeconds = 1.5;
     Collapse collapse = Collapse::Similar;
 

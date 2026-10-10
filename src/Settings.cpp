@@ -62,6 +62,8 @@ namespace settings
     config->groupByMod = mod->getSettingValue<bool>("group-by-mod");
     config->modColors = mod->getSettingValue<bool>("mod-colors");
     config->nestGuides = mod->getSettingValue<bool>("nest-guides");
+    auto toasts = mod->getSettingValue<std::string>("toasts");
+    config->toastLevel = toasts == "Off" ? Severity::Error + 1 : toasts == "Errors and warnings" ? Severity::Warning : Severity::Error;
     config->gapSeconds = mod->getSettingValue<double>("gap");
     config->collapse = parseCollapse(mod->getSettingValue<std::string>("collapse"));
     config->focusMods = parseModList(mod->getSettingValue<std::string>("focus-mods"));

@@ -72,6 +72,17 @@
 				"slider-step": 0.5
 			}
 		},
+		"toasts": {
+			"name": "Pop-ups in the game",
+			"description": "Errors (and warnings, if you want) show up as a notification in the game, so they aren't missed while the console is behind it. One every few seconds at most. With focused mods, only theirs",
+			"type": "string",
+			"default": "Errors",
+			"one-of": [
+				"Off",
+				"Errors",
+				"Errors and warnings"
+			]
+		},
 		"marker-key": {
 			"name": "Marker key",
 			"description": "Puts a marker line into the logs from the game, to see what got logged after you did something. <cy>b</c> does the same in the console",
