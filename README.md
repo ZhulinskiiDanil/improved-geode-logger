@@ -80,3 +80,5 @@ geode build
 ```
 
 Needs the Geode SDK (`GEODE_SDK`) and its CLI. The build installs the mod into the game, and the console shows a banner to restart it.
+
+How the parts fit together, and why some are the way they are: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
