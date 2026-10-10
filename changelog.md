@@ -1,4 +1,4 @@
-# v1.4.1
+# v1.5.0
 
 - On the first launch without Geode's console, a popup offers to turn it on and restart
 - The log levels set in the mods list stay for the next launches, 0 sets a mod back to everything
