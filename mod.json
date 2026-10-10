@@ -11,6 +11,14 @@
 	"load-priority": "first",
 	"description": "An interactive console for the logs: groups by mod, folds repeats, search, level and mod filters",
 	"repository": "https://github.com/ZhulinskiiDanil/improved-geode-logger",
+	"links": {
+		"source": "https://github.com/ZhulinskiiDanil/improved-geode-logger",
+		"community": "https://discord.gg/duuG4RqJKh"
+	},
+	"issues": {
+		"info": "Report bugs on GitHub or in the Discord server",
+		"url": "https://github.com/ZhulinskiiDanil/improved-geode-logger/issues"
+	},
 	"api": {
 		"include": [
 			"include/*.hpp"
