@@ -135,6 +135,22 @@ namespace console
     return info.srWindow.Bottom - info.srWindow.Top + 1;
   }
 
+  int windowColumns()
+  {
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    if (!isOpen() || !GetConsoleScreenBufferInfo(s_handle, &info))
+      return 120;
+    return info.srWindow.Right - info.srWindow.Left + 1;
+  }
+
+  int windowTop()
+  {
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    if (!isOpen() || !GetConsoleScreenBufferInfo(s_handle, &info))
+      return 0;
+    return info.srWindow.Top;
+  }
+
   void write(std::string_view utf8)
   {
     if (!isOpen() || utf8.empty())

@@ -5,11 +5,11 @@
 	},
 	"id": "zhulis.improved-logger",
 	"name": "Improved Logger",
-	"version": "v1.0.0",
+	"version": "v1.1.0",
 	"developer": "Zhulis",
 	"early-load": true,
 	"load-priority": "first",
-	"description": "Groups the console logs by mod, folds repeated lines into one and shows log nesting as a tree",
+	"description": "An interactive console for the logs: groups by mod, folds repeats, search, level and mod filters",
 	"repository": "https://github.com/ZhulinskiiDanil/improved-geode-logger",
 	"tags": [
 		"developer",
@@ -26,6 +26,16 @@
 			"description": "Off gives the console back to Geode's usual output",
 			"type": "bool",
 			"default": true
+		},
+		"mode": {
+			"name": "Console mode",
+			"description": "Interactive: the console becomes a screen to browse the logs with the keyboard and mouse, fold groups, search, filter by level and mod, read a log in full and copy it. Press <cy>?</c> in the console for all keys. Stream: lines are printed as they come, like Geode does",
+			"type": "string",
+			"default": "Interactive",
+			"one-of": [
+				"Interactive",
+				"Stream"
+			]
 		},
 		"group-by-mod": {
 			"name": "Group by mod",

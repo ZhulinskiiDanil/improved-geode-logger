@@ -1,5 +1,6 @@
 #include "Settings.hpp"
 #include "Console.hpp"
+#include "Tui.hpp"
 
 #include <Geode/Geode.hpp>
 #include <mutex>
@@ -13,7 +14,8 @@ namespace settings
 
   static Mod* geodeMod()
   {
-    return Loader::get()->getLoadedMod("geode.loader");
+    // While early mods load, Geode itself is not marked loaded yet
+    return Loader::get()->getInstalledMod("geode.loader");
   }
 
   static std::vector<std::string> parseModList(std::string_view text)
@@ -56,6 +58,7 @@ namespace settings
     auto config = std::make_shared<Config>();
 
     config->enabled = mod->getSettingValue<bool>("enabled");
+    config->interactive = mod->getSettingValue<std::string>("mode") == "Interactive";
     config->groupByMod = mod->getSettingValue<bool>("group-by-mod");
     config->modColors = mod->getSettingValue<bool>("mod-colors");
     config->nestGuides = mod->getSettingValue<bool>("nest-guides");
@@ -71,9 +74,14 @@ namespace settings
     }
 
     console::setGrouping(config->enabled);
+    bool interactive = config->enabled && config->interactive;
 
-    std::lock_guard lock(s_mutex);
-    s_config = std::move(config);
+    {
+      std::lock_guard lock(s_mutex);
+      s_config = std::move(config);
+    }
+
+    tui::setActive(interactive);
   }
 
   void load()

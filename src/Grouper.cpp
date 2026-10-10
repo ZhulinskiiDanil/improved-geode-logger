@@ -1,7 +1,10 @@
 #include "Grouper.hpp"
 #include "Console.hpp"
+#include "Look.hpp"
+#include "Model.hpp"
 #include "Settings.hpp"
 #include "Text.hpp"
+#include "Tui.hpp"
 
 #include <Geode/Geode.hpp>
 #include <chrono>
@@ -18,28 +21,12 @@ namespace grouper
   // Taller blocks are printed again instead of folded
   static constexpr int MAX_FOLD_ROWS = 30;
   static constexpr int MAX_HEADER_WIDTH = 100;
-  static constexpr int GUIDE_COLOR = 240;
-  static constexpr int PLAIN_MOD_COLOR = 245;
-
-  struct Source
-  {
-    Mod* mod = nullptr;
-    std::string name;
-    std::string thread;
-
-    bool operator==(Source const&) const = default;
-  };
+  static constexpr int GUIDE_COLOR = look::GUIDE_COLOR;
+  static constexpr int PLAIN_MOD_COLOR = look::PLAIN_MOD_COLOR;
 
   // One log as it is on the screen
-  struct Entry
+  struct Entry : Record
   {
-    Source source;
-    int severity = 0;
-    int nest = 0;
-    int color = PLAIN_MOD_COLOR;
-    std::string time;
-    std::string content;
-    std::string pattern;
     std::vector<int> widths;
   };
 
@@ -122,56 +109,12 @@ namespace grouper
     return rows;
   }
 
-  // Geode's console colors: one for the time and level, one for the message
-  static std::pair<int, int> severityColors(int severity)
-  {
-    switch (severity)
-    {
-    case Severity::Trace:
-      return {54, 254};
-    case Severity::Debug:
-      return {243, 250};
-    case Severity::Info:
-      return {45, 254};
-    case Severity::Warning:
-      return {229, 230};
-    case Severity::Error:
-      return {9, 224};
-    default:
-      return {7, 7};
-    }
-  }
-
-  static std::string_view severityName(int severity)
-  {
-    switch (severity)
-    {
-    case Severity::Trace:
-      return "TRACE";
-    case Severity::Debug:
-      return "DEBUG";
-    case Severity::Info:
-      return "INFO ";
-    case Severity::Warning:
-      return "WARN ";
-    case Severity::Error:
-      return "ERROR";
-    default:
-      return "?????";
-    }
-  }
-
   static std::string timeOf(log::BorrowedLog const& log, bool millis)
   {
     auto local = asp::localtime(log.m_time.to_time_t());
     if (millis)
       return fmt::format("{:%H:%M:%S}.{:03}", local, log.m_time.timeSinceEpoch().millis() % 1000);
     return fmt::format("{:%H:%M:%S}", local);
-  }
-
-  static bool showsThread(std::string_view thread)
-  {
-    return !thread.empty() && thread != "Main";
   }
 
   // ! --- Printing --- !
@@ -184,7 +127,7 @@ namespace grouper
     out.text(entry.source.name);
     out.reset();
 
-    if (showsThread(entry.source.thread))
+    if (look::showsThread(entry.source.thread))
     {
       out.color(GUIDE_COLOR);
       out.text(" · ");
@@ -203,7 +146,7 @@ namespace grouper
 
   static void printEntry(Lines& out, settings::Config const& config, Entry const& entry, int count)
   {
-    auto [prefixColor, messageColor] = severityColors(entry.severity);
+    auto [prefixColor, messageColor] = look::severityColors(entry.severity);
 
     auto gutter = [&]
     {
@@ -229,7 +172,7 @@ namespace grouper
     out.color(prefixColor);
     out.text(entry.time);
     out.text(" ");
-    out.text(severityName(entry.severity));
+    out.text(look::severityName(entry.severity));
     out.reset();
     out.text(" ");
 
@@ -420,7 +363,7 @@ namespace grouper
 
     auto nestSpaces = std::get<2>(log.truncateWithNest());
 
-    Entry entry{
+    Record record{
         .source = {log.m_mod, std::string(log.m_source), std::string(log.m_thread)},
         .severity = log.m_severity,
         .nest = nestSpaces > 0 ? (nestSpaces + 1) / 2 : 0,
@@ -429,7 +372,21 @@ namespace grouper
         .content = std::string(log.m_content),
     };
     if (config->collapse == settings::Collapse::Similar)
-      entry.pattern = text::withoutNumbers(entry.content);
+      record.pattern = text::withoutNumbers(record.content);
+
+    // The interactive screen keeps every log, also while the stream is on, to have the history ready
+    {
+      auto shown = record;
+      shown.content = text::clean(shown.content);
+      auto& model = model::get();
+      std::lock_guard lock(model.mutex);
+      model.add(std::move(shown), *config);
+    }
+
+    if (tui::isActive())
+      return;
+
+    Entry entry{std::move(record), {}};
 
     bool escapeCodes = console::hasEscapeCodes();
     auto now = std::chrono::steady_clock::now();

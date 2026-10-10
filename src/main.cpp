@@ -1,6 +1,7 @@
 #include "Console.hpp"
 #include "Grouper.hpp"
 #include "Settings.hpp"
+#include "Tui.hpp"
 
 #include <Geode/Geode.hpp>
 
@@ -21,5 +22,6 @@ $on_mod(Loaded)
                            return false; })
       .leak();
 
+  tui::start();
   settings::load();
 }

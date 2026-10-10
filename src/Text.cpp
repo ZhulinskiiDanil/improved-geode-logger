@@ -1,5 +1,6 @@
 #include "Text.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 
@@ -70,41 +71,135 @@ namespace text
            (cp >= 0x20000 && cp <= 0x3FFFD);
   }
 
+  // Reads one code point at i and moves i past it
+  static uint32_t next(std::string_view utf8, size_t& i)
+  {
+    auto byte = static_cast<uint8_t>(utf8[i]);
+    uint32_t cp = byte;
+    size_t length = 1;
+    if (byte >= 0xF0)
+    {
+      cp = byte & 0x07;
+      length = 4;
+    }
+    else if (byte >= 0xE0)
+    {
+      cp = byte & 0x0F;
+      length = 3;
+    }
+    else if (byte >= 0xC0)
+    {
+      cp = byte & 0x1F;
+      length = 2;
+    }
+
+    for (size_t k = 1; k < length && i + k < utf8.size(); k++)
+      cp = (cp << 6) | (static_cast<uint8_t>(utf8[i + k]) & 0x3F);
+    i = std::min(i + length, utf8.size());
+    return cp;
+  }
+
+  static int widthOf(uint32_t cp)
+  {
+    if (cp == '\t')
+      return 4;
+    if (cp < 0x20)
+      return 0;
+    return isWide(cp) ? 2 : 1;
+  }
+
   int width(std::string_view utf8)
   {
     int columns = 0;
     size_t i = 0;
     while (i < utf8.size())
-    {
-      auto byte = static_cast<uint8_t>(utf8[i]);
-      uint32_t cp = byte;
-      size_t length = 1;
-      if (byte >= 0xF0)
-      {
-        cp = byte & 0x07;
-        length = 4;
-      }
-      else if (byte >= 0xE0)
-      {
-        cp = byte & 0x0F;
-        length = 3;
-      }
-      else if (byte >= 0xC0)
-      {
-        cp = byte & 0x1F;
-        length = 2;
-      }
-
-      for (size_t k = 1; k < length && i + k < utf8.size(); k++)
-        cp = (cp << 6) | (static_cast<uint8_t>(utf8[i + k]) & 0x3F);
-      i += length;
-
-      if (cp == '\t')
-        columns += 4;
-      else if (cp >= 0x20)
-        columns += isWide(cp) ? 2 : 1;
-    }
+      columns += widthOf(next(utf8, i));
     return columns;
+  }
+
+  std::string_view fit(std::string_view utf8, int columns)
+  {
+    int used = 0;
+    size_t i = 0;
+    while (i < utf8.size())
+    {
+      size_t start = i;
+      used += widthOf(next(utf8, i));
+      if (used > columns)
+        return utf8.substr(0, start);
+    }
+    return utf8;
+  }
+
+  std::vector<std::string> wrap(std::string_view content, int columns)
+  {
+    std::vector<std::string> out;
+    columns = std::max(columns, 1);
+    for (auto line : splitLines(content))
+    {
+      do
+      {
+        auto part = fit(line, columns);
+        // A character wider than the whole line still has to go somewhere
+        if (part.empty() && !line.empty())
+        {
+          size_t i = 0;
+          next(line, i);
+          part = line.substr(0, i);
+        }
+        out.emplace_back(part);
+        line.remove_prefix(part.size());
+      } while (!line.empty());
+    }
+    return out;
+  }
+
+  std::string clean(std::string_view content)
+  {
+    std::string out;
+    out.reserve(content.size());
+    for (size_t i = 0; i < content.size(); i++)
+    {
+      char c = content[i];
+      if (c == '\x1b')
+      {
+        // CSI sequences like colors end with a letter
+        if (i + 1 < content.size() && content[i + 1] == '[')
+        {
+          i += 2;
+          while (i < content.size() && !(content[i] >= '@' && content[i] <= '~'))
+            i++;
+        }
+        continue;
+      }
+      if (c == '\t')
+        out += "    ";
+      else if (c == '\n' || static_cast<uint8_t>(c) >= 0x20)
+        out.push_back(c);
+    }
+    return out;
+  }
+
+  static char lower(char c)
+  {
+    return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+  }
+
+  bool containsCaseless(std::string_view text, std::string_view part)
+  {
+    if (part.empty())
+      return true;
+    if (part.size() > text.size())
+      return false;
+    for (size_t i = 0; i + part.size() <= text.size(); i++)
+    {
+      size_t k = 0;
+      while (k < part.size() && lower(text[i + k]) == lower(part[k]))
+        k++;
+      if (k == part.size())
+        return true;
+    }
+    return false;
   }
 
   std::vector<std::string_view> splitLines(std::string_view content)

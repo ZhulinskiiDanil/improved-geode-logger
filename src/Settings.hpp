@@ -16,6 +16,8 @@ namespace settings
   struct Config
   {
     bool enabled = true;
+    // A full screen to browse the logs, or lines printed as they come
+    bool interactive = true;
     bool groupByMod = true;
     bool modColors = true;
     bool nestGuides = true;

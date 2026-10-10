@@ -19,6 +19,9 @@ namespace console
 
   // Rows of the visible window, the cursor can't go above it
   int windowRows();
+  int windowColumns();
+  // Top row of the window in the buffer, mouse positions count from the buffer's top
+  int windowTop();
 
   void write(std::string_view utf8);
 

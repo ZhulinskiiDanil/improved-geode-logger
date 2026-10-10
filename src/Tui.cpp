@@ -1,0 +1,1347 @@
+#include "Tui.hpp"
+#include "Console.hpp"
+#include "Look.hpp"
+#include "Model.hpp"
+#include "Settings.hpp"
+#include "Text.hpp"
+
+#include <Geode/Geode.hpp>
+#include <atomic>
+#include <chrono>
+#include <thread>
+
+#include <Windows.h>
+
+using namespace geode::prelude;
+
+namespace tui
+{
+  // ! --- Look --- !
+
+  static constexpr int TITLE_BG = 25;
+  static constexpr int TITLE_FG = 255;
+  static constexpr int BAR_BG = 235;
+  static constexpr int BAR_FG = 248;
+  static constexpr int KEY_FG = 81;
+  static constexpr int SELECT_BG = 238;
+  static constexpr int DIM = 243;
+  static constexpr int BORDER = 239;
+  static constexpr int LIVE = 78;
+  static constexpr int PAUSED = 221;
+  static constexpr int WARNING_COLOR = 221;
+  static constexpr int ERROR_COLOR = 203;
+  static constexpr int MATCH_FG = 16;
+  static constexpr int MATCH_BG = 221;
+  static constexpr int SIDEBAR_WIDTH = 30;
+  static constexpr auto FRAME_TIME = std::chrono::milliseconds(33);
+
+  struct Style
+  {
+    int fg = -1;
+    int bg = -1;
+    bool bold = false;
+  };
+
+  // One screen row being drawn, cut to its width
+  class Cells
+  {
+  public:
+    explicit Cells(int width, int bg = -1) : m_width(width), m_bg(bg) {}
+
+    int left() const { return m_width - m_used; }
+    int used() const { return m_used; }
+
+    // Text that doesn't fit ends with "…", keeping `reserve` columns free at the end
+    void put(std::string_view text, Style style = {}, int reserve = 0)
+    {
+      int room = left() - reserve;
+      if (room <= 0 || text.empty())
+        return;
+
+      auto part = text::fit(text, room);
+      bool cut = part.size() < text.size();
+      if (cut)
+        part = text::fit(text, room - 1);
+
+      sgr(style);
+      m_out += part;
+      m_used += text::width(part);
+      if (cut)
+      {
+        m_out += "…";
+        m_used++;
+      }
+    }
+
+    void pad(int until, Style style = {})
+    {
+      until = std::min(until, m_width);
+      if (until <= m_used)
+        return;
+      sgr(style);
+      m_out.append(until - m_used, ' ');
+      m_used = until;
+    }
+
+    // The rest of the row goes to the right side, as far right as it fits
+    void right(std::string_view text, Style style = {})
+    {
+      pad(m_width - text::width(text), {});
+      put(text, style);
+    }
+
+    std::string finish()
+    {
+      pad(m_width);
+      return m_out + "\x1b[0m";
+    }
+
+  private:
+    void sgr(Style style)
+    {
+      if (style.bg < 0)
+        style.bg = m_bg;
+      m_out += "\x1b[0m";
+      if (style.fg >= 0)
+        m_out += fmt::format("\x1b[38;5;{}m", style.fg);
+      if (style.bg >= 0)
+        m_out += fmt::format("\x1b[48;5;{}m", style.bg);
+      if (style.bold)
+        m_out += "\x1b[1m";
+    }
+
+    int m_width;
+    int m_bg;
+    int m_used = 0;
+    std::string m_out;
+  };
+
+  static std::string compact(uint64_t number)
+  {
+    if (number < 1000)
+      return std::to_string(number);
+    if (number < 10000)
+      return fmt::format("{:.1f}k", number / 1000.0);
+    if (number < 1000000)
+      return fmt::format("{}k", number / 1000);
+    return fmt::format("{:.1f}M", number / 1000000.0);
+  }
+
+  static std::string_view levelName(int severity)
+  {
+    switch (severity)
+    {
+    case Severity::Trace:
+      return "TRACE";
+    case Severity::Debug:
+      return "DEBUG";
+    case Severity::Info:
+      return "INFO";
+    case Severity::Warning:
+      return "WARN";
+    default:
+      return "ERROR";
+    }
+  }
+
+  // ! --- State --- !
+
+  // A line of the list: a group's header (row -1) or one of its rows
+  struct LineRef
+  {
+    uint64_t group = 0;
+    int row = -1;
+
+    bool operator==(LineRef const&) const = default;
+  };
+
+  struct Line
+  {
+    LineRef ref;
+    model::Group* group = nullptr;
+    model::Row* row = nullptr;
+  };
+
+  // Where things were drawn on the last frame, for the keys and the mouse
+  struct Layout
+  {
+    int height = 0;
+    int width = 0;
+    int listRows = 0;
+    int sidebarWidth = 0;
+    int top = 0;
+    int sidebarTop = 0;
+  };
+
+  struct State
+  {
+    bool follow = true;
+    std::optional<LineRef> selected;
+    std::optional<LineRef> top;
+    int selectedIndex = -1;
+    int topIndex = 0;
+
+    int minLevel = Severity::Trace;
+    std::string search;
+    bool typing = false;
+
+    bool sidebar = false;
+    bool sidebarFocus = false;
+    int sidebarIndex = 0;
+
+    bool details = false;
+    bool help = false;
+
+    uint64_t logsAtPause = 0;
+    std::string flash;
+    std::chrono::steady_clock::time_point flashUntil;
+  };
+
+  static std::atomic<bool> s_wanted = false;
+  static std::atomic<bool> s_started = false;
+
+  // Only the screen's thread touches these
+  static bool s_active = false;
+  static bool s_dirty = true;
+  static HANDLE s_input = INVALID_HANDLE_VALUE;
+  static DWORD s_inputMode = 0;
+  static DWORD s_buttons = 0;
+  static State s;
+  static Layout s_layout;
+  static std::vector<LineRef> s_view;
+  static std::vector<std::string> s_sidebarMods;
+
+  static void flash(std::string text)
+  {
+    s.flash = std::move(text);
+    s.flashUntil = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  }
+
+  // ! --- List --- !
+
+  static bool passes(Record const& record)
+  {
+    if (record.severity < s.minLevel)
+      return false;
+    if (s.search.empty())
+      return true;
+    return text::containsCaseless(record.content, s.search) || text::containsCaseless(record.source.name, s.search);
+  }
+
+  static bool filtering()
+  {
+    return !s.search.empty() || s.minLevel > Severity::Trace;
+  }
+
+  static std::vector<Line> flatten(model::Model& model)
+  {
+    std::vector<Line> lines;
+    for (auto& group : model.groups)
+    {
+      auto stats = model.modStats(group.source.name);
+      if (stats && stats->hidden)
+        continue;
+
+      auto start = lines.size();
+      lines.push_back({{group.id, -1}, &group, nullptr});
+
+      bool any = false;
+      for (size_t i = 0; i < group.rows.size(); i++)
+      {
+        auto& row = group.rows[i];
+        if (!passes(row.record))
+          continue;
+        any = true;
+        if (group.collapsed)
+          break;
+        lines.push_back({{group.id, static_cast<int>(i)}, &group, &row});
+      }
+
+      // A search or level filter hides groups with nothing left in them
+      if (!any && filtering())
+        lines.resize(start);
+    }
+    return lines;
+  }
+
+  static int indexOf(std::vector<Line> const& lines, std::optional<LineRef> const& ref)
+  {
+    if (!ref)
+      return -1;
+    int header = -1;
+    for (int i = static_cast<int>(lines.size()) - 1; i >= 0; i--)
+    {
+      if (lines[i].ref == *ref)
+        return i;
+      if (lines[i].ref.group == ref->group && lines[i].ref.row == -1)
+        header = i;
+    }
+    // The row was folded away or filtered out, its group's header stands in
+    return header;
+  }
+
+  static model::Group* findGroup(model::Model& model, uint64_t id)
+  {
+    for (auto it = model.groups.rbegin(); it != model.groups.rend(); ++it)
+    {
+      if (it->id == id)
+        return &*it;
+    }
+    return nullptr;
+  }
+
+  // ! --- Moving around --- !
+
+  static void pause()
+  {
+    if (!s.follow)
+      return;
+    s.follow = false;
+    s.logsAtPause = model::get().logs;
+    if (!s_view.empty())
+    {
+      s.selected = s_view.back();
+      s.selectedIndex = static_cast<int>(s_view.size()) - 1;
+    }
+  }
+
+  static void follow()
+  {
+    s.follow = true;
+    s.selected.reset();
+  }
+
+  static void select(int index)
+  {
+    if (s_view.empty())
+      return;
+    index = std::clamp(index, 0, static_cast<int>(s_view.size()) - 1);
+    s.selected = s_view[index];
+    s.selectedIndex = index;
+  }
+
+  static void move(int delta)
+  {
+    if (s_view.empty())
+      return;
+    if (s.follow)
+    {
+      if (delta >= 0)
+        return;
+      pause();
+      delta++;
+    }
+
+    int index = s.selectedIndex + delta;
+    // Going down past the last line goes back to following the new logs
+    if (index >= static_cast<int>(s_view.size()))
+    {
+      follow();
+      return;
+    }
+    select(index);
+  }
+
+  static void scroll(int delta)
+  {
+    if (s_view.empty())
+      return;
+    if (s.follow && delta >= 0)
+      return;
+    pause();
+
+    int last = std::max(0, static_cast<int>(s_view.size()) - s_layout.listRows);
+    int top = std::clamp(s_layout.top + delta, 0, last);
+    if (delta > 0 && s_layout.top + delta > last)
+    {
+      follow();
+      return;
+    }
+    s.top = s_view[top];
+    // The selection stays on the screen
+    select(std::clamp(s.selectedIndex, top, top + s_layout.listRows - 1));
+  }
+
+  static std::optional<Line> selectedLine(std::vector<Line> const& lines)
+  {
+    if (s.follow)
+      return lines.empty() ? std::nullopt : std::optional(lines.back());
+    auto index = indexOf(lines, s.selected);
+    return index < 0 ? std::nullopt : std::optional(lines[index]);
+  }
+
+  // ! --- Actions --- !
+
+  static void setCollapsed(LineRef ref, std::optional<bool> collapsed)
+  {
+    auto& model = model::get();
+    std::lock_guard lock(model.mutex);
+    if (auto group = findGroup(model, ref.group))
+    {
+      group->collapsed = collapsed.value_or(!group->collapsed);
+      if (group->collapsed && !s.follow)
+        s.selected = LineRef{group->id, -1};
+    }
+  }
+
+  static void setAllCollapsed(bool collapsed)
+  {
+    auto& model = model::get();
+    std::lock_guard lock(model.mutex);
+    for (auto& group : model.groups)
+      group.collapsed = collapsed;
+    if (s.selected)
+      s.selected->row = -1;
+    flash(collapsed ? "Folded every group" : "Unfolded every group");
+  }
+
+  static std::string formatRow(model::Group const& group, model::Row const& row)
+  {
+    auto line = fmt::format("{} {} [{}]: {}", row.record.time, levelName(row.record.severity), group.source.name, row.record.content);
+    if (row.count > 1)
+      line += fmt::format(" (x{})", row.count);
+    return line;
+  }
+
+  static void copyToClipboard(std::string const& utf8)
+  {
+    auto wide = string::utf8ToWide(utf8);
+    if (!OpenClipboard(nullptr))
+      return;
+    EmptyClipboard();
+    if (auto memory = GlobalAlloc(GMEM_MOVEABLE, (wide.size() + 1) * sizeof(wchar_t)))
+    {
+      std::memcpy(GlobalLock(memory), wide.c_str(), (wide.size() + 1) * sizeof(wchar_t));
+      GlobalUnlock(memory);
+      if (!SetClipboardData(CF_UNICODETEXT, memory))
+        GlobalFree(memory);
+    }
+    CloseClipboard();
+  }
+
+  static void copySelection()
+  {
+    auto& model = model::get();
+    std::string text;
+    int lines = 0;
+    {
+      std::lock_guard lock(model.mutex);
+      auto line = selectedLine(flatten(model));
+      if (!line)
+        return;
+      if (line->row)
+      {
+        text = formatRow(*line->group, *line->row);
+        lines = 1;
+      }
+      else
+      {
+        for (auto const& row : line->group->rows)
+        {
+          if (!passes(row.record))
+            continue;
+          text += formatRow(*line->group, row) + "\n";
+          lines++;
+        }
+      }
+    }
+    copyToClipboard(text);
+    flash(lines == 1 ? "Copied the log" : fmt::format("Copied {} logs", lines));
+  }
+
+  static void toggleMod(int index)
+  {
+    if (index < 0 || index >= static_cast<int>(s_sidebarMods.size()))
+      return;
+    auto& model = model::get();
+    std::lock_guard lock(model.mutex);
+    if (auto stats = model.modStats(s_sidebarMods[index]))
+      stats->hidden = !stats->hidden;
+  }
+
+  // Only this mod, or everyone again when it already was the only one
+  static void soloMod(int index)
+  {
+    if (index < 0 || index >= static_cast<int>(s_sidebarMods.size()))
+      return;
+    auto& model = model::get();
+    std::lock_guard lock(model.mutex);
+    auto const& name = s_sidebarMods[index];
+    bool alone = std::ranges::all_of(model.mods, [&](auto const& mod)
+                                     { return mod.hidden == (mod.name != name); });
+    for (auto& mod : model.mods)
+      mod.hidden = !alone && mod.name != name;
+    flash(alone ? "Showing every mod" : fmt::format("Showing only {}", name));
+  }
+
+  static void showAllMods()
+  {
+    auto& model = model::get();
+    std::lock_guard lock(model.mutex);
+    for (auto& mod : model.mods)
+      mod.hidden = false;
+    flash("Showing every mod");
+  }
+
+  static void clearLogs()
+  {
+    auto& model = model::get();
+    std::lock_guard lock(model.mutex);
+    model.clear();
+    follow();
+    s.top.reset();
+    flash("Cleared, the log file still has everything");
+  }
+
+  // ! --- Keys --- !
+
+  static void onTyping(KEY_EVENT_RECORD const& key)
+  {
+    switch (key.wVirtualKeyCode)
+    {
+    case VK_RETURN:
+      s.typing = false;
+      return;
+    case VK_ESCAPE:
+      s.typing = false;
+      s.search.clear();
+      return;
+    case VK_BACK:
+      // Drop the last UTF-8 character
+      while (!s.search.empty() && (static_cast<uint8_t>(s.search.back()) & 0xC0) == 0x80)
+        s.search.pop_back();
+      if (!s.search.empty())
+        s.search.pop_back();
+      return;
+    default:
+      break;
+    }
+
+    wchar_t c = key.uChar.UnicodeChar;
+    if (c >= 0x20)
+    {
+      std::wstring wide(1, c);
+      s.search += string::wideToUtf8(wide);
+    }
+  }
+
+  static void onSidebarKey(KEY_EVENT_RECORD const& key, wchar_t c)
+  {
+    int count = static_cast<int>(s_sidebarMods.size());
+    switch (key.wVirtualKeyCode)
+    {
+    case VK_UP:
+      s.sidebarIndex = std::max(0, s.sidebarIndex - 1);
+      return;
+    case VK_DOWN:
+      s.sidebarIndex = std::min(count - 1, s.sidebarIndex + 1);
+      return;
+    case VK_PRIOR:
+      s.sidebarIndex = std::max(0, s.sidebarIndex - s_layout.listRows);
+      return;
+    case VK_NEXT:
+      s.sidebarIndex = std::min(count - 1, s.sidebarIndex + s_layout.listRows);
+      return;
+    case VK_SPACE:
+    case VK_RETURN:
+      toggleMod(s.sidebarIndex);
+      return;
+    case VK_TAB:
+    case VK_ESCAPE:
+    case VK_RIGHT:
+      s.sidebarFocus = false;
+      return;
+    default:
+      break;
+    }
+
+    if (c == L's')
+      soloMod(s.sidebarIndex);
+    else if (c == L'a')
+      showAllMods();
+    else if (c == L'k')
+      s.sidebarIndex = std::max(0, s.sidebarIndex - 1);
+    else if (c == L'j')
+      s.sidebarIndex = std::min(count - 1, s.sidebarIndex + 1);
+    else if (c == L'm')
+    {
+      s.sidebar = false;
+      s.sidebarFocus = false;
+    }
+  }
+
+  static void onKey(KEY_EVENT_RECORD const& key)
+  {
+    if (!key.bKeyDown)
+      return;
+
+    if (s.typing)
+    {
+      onTyping(key);
+      return;
+    }
+
+    wchar_t c = key.uChar.UnicodeChar;
+    bool ctrl = key.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED);
+
+    if (s.help)
+    {
+      s.help = false;
+      return;
+    }
+
+    // Ctrl+C copies here, it doesn't close the game
+    if (ctrl && key.wVirtualKeyCode == 'C')
+    {
+      copySelection();
+      return;
+    }
+
+    if (s.sidebarFocus)
+    {
+      onSidebarKey(key, c);
+      return;
+    }
+
+    for (WORD repeat = 0; repeat < std::max<WORD>(key.wRepeatCount, 1); repeat++)
+    {
+      switch (key.wVirtualKeyCode)
+      {
+      case VK_UP:
+        move(-1);
+        continue;
+      case VK_DOWN:
+        move(1);
+        continue;
+      case VK_PRIOR:
+        move(-std::max(1, s_layout.listRows - 1));
+        continue;
+      case VK_NEXT:
+        move(std::max(1, s_layout.listRows - 1));
+        continue;
+      default:
+        break;
+      }
+      break;
+    }
+
+    switch (key.wVirtualKeyCode)
+    {
+    case VK_UP:
+    case VK_DOWN:
+    case VK_PRIOR:
+    case VK_NEXT:
+      return;
+    case VK_HOME:
+      pause();
+      select(0);
+      return;
+    case VK_END:
+      follow();
+      return;
+    case VK_RETURN:
+      if (s.selected && s.selected->row < 0)
+        setCollapsed(*s.selected, std::nullopt);
+      else
+        s.details = !s.details;
+      return;
+    case VK_SPACE:
+      if (s.selected)
+        setCollapsed(*s.selected, std::nullopt);
+      return;
+    case VK_LEFT:
+      if (s.selected)
+      {
+        if (s.selected->row >= 0)
+          s.selected->row = -1;
+        else
+          setCollapsed(*s.selected, true);
+      }
+      return;
+    case VK_RIGHT:
+      if (s.selected)
+        setCollapsed(*s.selected, false);
+      return;
+    case VK_TAB:
+      s.sidebar = true;
+      s.sidebarFocus = true;
+      return;
+    case VK_ESCAPE:
+      if (s.details)
+        s.details = false;
+      else if (!s.search.empty())
+        s.search.clear();
+      else if (s.minLevel > Severity::Trace)
+        s.minLevel = Severity::Trace;
+      else if (!s.follow)
+        follow();
+      return;
+    default:
+      break;
+    }
+
+    switch (c)
+    {
+    case L'k':
+      move(-1);
+      break;
+    case L'j':
+      move(1);
+      break;
+    case L'g':
+      pause();
+      select(0);
+      break;
+    case L'G':
+      follow();
+      break;
+    case L'/':
+      s.typing = true;
+      break;
+    case L'1':
+    case L'2':
+    case L'3':
+    case L'4':
+    case L'5':
+      s.minLevel = Severity::Trace + (c - L'1');
+      flash(fmt::format("Showing {} and above", levelName(s.minLevel)));
+      break;
+    case L'm':
+      s.sidebar = !s.sidebar;
+      s.sidebarFocus = false;
+      break;
+    case L'c':
+      setAllCollapsed(true);
+      break;
+    case L'e':
+      setAllCollapsed(false);
+      break;
+    case L'f':
+    case L'p':
+      if (s.follow)
+        pause();
+      else
+        follow();
+      break;
+    case L'd':
+      s.details = !s.details;
+      break;
+    case L'y':
+      copySelection();
+      break;
+    case L'x':
+      clearLogs();
+      break;
+    case L'?':
+    case L'h':
+      s.help = true;
+      break;
+    default:
+      break;
+    }
+  }
+
+  // ! --- Mouse --- !
+
+  static void onClick(int x, int y, bool doubleClick)
+  {
+    if (s.help)
+    {
+      s.help = false;
+      return;
+    }
+
+    int listRow = y - 1;
+    if (listRow < 0 || listRow >= s_layout.listRows)
+      return;
+
+    if (x < s_layout.sidebarWidth)
+    {
+      // The first row of the sidebar is its title
+      int index = s_layout.sidebarTop + listRow - 1;
+      if (listRow == 0 || index >= static_cast<int>(s_sidebarMods.size()))
+        return;
+      s.sidebarFocus = true;
+      s.sidebarIndex = index;
+      toggleMod(index);
+      return;
+    }
+
+    int index = s_layout.top + listRow;
+    if (index >= static_cast<int>(s_view.size()))
+      return;
+
+    s.sidebarFocus = false;
+    pause();
+    select(index);
+    if (s_view[index].row < 0)
+      setCollapsed(s_view[index], std::nullopt);
+    else if (doubleClick)
+      s.details = !s.details;
+  }
+
+  static void onMouse(MOUSE_EVENT_RECORD const& mouse)
+  {
+    int x = mouse.dwMousePosition.X;
+    int y = mouse.dwMousePosition.Y - console::windowTop();
+
+    if (mouse.dwEventFlags & MOUSE_WHEELED)
+    {
+      auto delta = static_cast<short>(HIWORD(mouse.dwButtonState));
+      if (x < s_layout.sidebarWidth)
+      {
+        int count = static_cast<int>(s_sidebarMods.size());
+        s.sidebarIndex = std::clamp(s.sidebarIndex + (delta > 0 ? -3 : 3), 0, std::max(0, count - 1));
+      }
+      else
+        scroll(delta > 0 ? -3 : 3);
+      return;
+    }
+
+    bool pressed = mouse.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED;
+    bool wasPressed = s_buttons & FROM_LEFT_1ST_BUTTON_PRESSED;
+    s_buttons = mouse.dwButtonState;
+
+    if (mouse.dwEventFlags & DOUBLE_CLICK)
+      onClick(x, y, true);
+    else if (pressed && !wasPressed)
+      onClick(x, y, false);
+  }
+
+  // ! --- Drawing --- !
+
+  static void drawTitle(Cells& row, model::Model const& model)
+  {
+    row.put(" ◆ Improved Logger ", {TITLE_FG, TITLE_BG, true});
+    row.put("  ", {BAR_FG, BAR_BG});
+    row.put(fmt::format("{} logs", compact(model.logs)), {BAR_FG, BAR_BG});
+
+    auto warnings = model.severityCounts[Severity::Warning - Severity::Trace];
+    auto errors = model.severityCounts[Severity::Error - Severity::Trace];
+    if (warnings)
+      row.put(fmt::format("  ⚠ {}", compact(warnings)), {WARNING_COLOR, BAR_BG});
+    if (errors)
+      row.put(fmt::format("  ✖ {}", compact(errors)), {ERROR_COLOR, BAR_BG, true});
+
+    if (s.minLevel > Severity::Trace)
+      row.put(fmt::format("   │  {}+", levelName(s.minLevel)), {KEY_FG, BAR_BG});
+    if (!s.search.empty())
+      row.put(fmt::format("   │  search \"{}\"", s.search), {KEY_FG, BAR_BG});
+
+    int hidden = static_cast<int>(std::ranges::count_if(model.mods, [](auto const& mod)
+                                                        { return mod.hidden; }));
+    if (hidden)
+      row.put(fmt::format("   │  {} hidden", hidden), {KEY_FG, BAR_BG});
+
+    if (s.follow)
+      row.right("● LIVE ", {LIVE, BAR_BG, true});
+    else
+    {
+      auto fresh = model.logs - std::min(model.logs, s.logsAtPause);
+      row.right(fresh ? fmt::format("❚❚ PAUSED  +{} new  End ", compact(fresh)) : std::string("❚❚ PAUSED  End "), {PAUSED, BAR_BG, true});
+    }
+  }
+
+  static void drawHeader(Cells& row, model::Group const& group, bool selected)
+  {
+    int bg = selected ? SELECT_BG : -1;
+    row.put(group.collapsed ? " ▸ " : " ▾ ", {group.color, bg, true});
+    row.put(group.source.name, {group.color, bg, true});
+    if (look::showsThread(group.source.thread))
+      row.put(fmt::format(" · {}", group.source.thread), {DIM, bg});
+
+    row.put(fmt::format("   {} {}", group.logs, group.logs == 1 ? "log" : "logs"), {DIM, bg});
+    if (group.warnings)
+      row.put(fmt::format("  ⚠ {}", group.warnings), {WARNING_COLOR, bg});
+    if (group.errors)
+      row.put(fmt::format("  ✖ {}", group.errors), {ERROR_COLOR, bg, true});
+
+    auto time = group.firstTime == group.lastTime ? group.firstTime : fmt::format("{} – {}", group.firstTime, group.lastTime);
+    if (row.left() > text::width(time) + 2)
+      row.right(time + " ", {DIM, bg});
+  }
+
+  // The message with every match of the search marked
+  static void putMarked(Cells& row, std::string_view message, Style style, int reserve)
+  {
+    if (s.search.empty())
+    {
+      row.put(message, style, reserve);
+      return;
+    }
+
+    size_t from = 0;
+    while (from < message.size() && row.left() > reserve)
+    {
+      size_t found = std::string_view::npos;
+      for (size_t i = from; i + s.search.size() <= message.size(); i++)
+      {
+        if (text::containsCaseless(message.substr(i, s.search.size()), s.search))
+        {
+          found = i;
+          break;
+        }
+      }
+      if (found == std::string_view::npos)
+      {
+        row.put(message.substr(from), style, reserve);
+        return;
+      }
+      row.put(message.substr(from, found - from), style, reserve);
+      row.put(message.substr(found, s.search.size()), {MATCH_FG, MATCH_BG, true}, reserve);
+      from = found + s.search.size();
+    }
+  }
+
+  static void drawRow(Cells& row, settings::Config const& config, model::Group const& group, model::Row const& logRow, bool selected)
+  {
+    auto const& record = logRow.record;
+    int bg = selected ? SELECT_BG : -1;
+    auto [prefixColor, messageColor] = look::severityColors(record.severity);
+
+    row.put("   ", {-1, bg});
+    row.put("│ ", {group.color, bg});
+    row.put(record.time, {DIM, bg});
+    row.put(" ", {-1, bg});
+    row.put(look::severityName(record.severity), {prefixColor, bg, record.severity >= Severity::Warning});
+    row.put(" ", {-1, bg});
+
+    if (record.nest > 0)
+    {
+      std::string guides;
+      for (int i = 0; i < record.nest; i++)
+        guides += config.nestGuides ? "│ " : "  ";
+      row.put(guides, {look::GUIDE_COLOR, bg});
+    }
+
+    auto lines = text::splitLines(record.content);
+    std::string more = lines.size() > 1 ? fmt::format("  ⏎ +{}", lines.size() - 1) : std::string();
+    std::string badge = logRow.count > 1 ? fmt::format(" ×{} ", logRow.count) : std::string();
+    int reserve = text::width(more) + (badge.empty() ? 0 : text::width(badge) + 2);
+
+    putMarked(row, lines.empty() ? std::string_view() : lines[0], {messageColor, bg}, reserve);
+    if (!more.empty())
+      row.put(more, {DIM, bg});
+    if (!badge.empty())
+    {
+      row.put("  ", {-1, bg});
+      row.put(badge, {16, group.color, true});
+    }
+  }
+
+  static void drawSidebarRow(Cells& row, model::Model& model, int listRow)
+  {
+    if (listRow == 0)
+    {
+      row.put(" MODS", {s.sidebarFocus ? KEY_FG : BAR_FG, -1, true});
+      row.put(s.sidebarFocus ? "  Space hide · s solo" : "  Tab", {DIM});
+      return;
+    }
+
+    int index = s_layout.sidebarTop + listRow - 1;
+    if (index >= static_cast<int>(s_sidebarMods.size()))
+      return;
+
+    auto stats = model.modStats(s_sidebarMods[index]);
+    if (!stats)
+      return;
+
+    bool selected = s.sidebarFocus && index == s.sidebarIndex;
+    int bg = selected ? SELECT_BG : -1;
+    row.put(stats->hidden ? " ○ " : " ● ", {stats->hidden ? DIM : stats->color, bg});
+
+    auto count = compact(stats->logs);
+    int nameColor = stats->hidden ? DIM : stats->errors ? ERROR_COLOR : stats->warnings ? WARNING_COLOR : 252;
+    row.put(stats->name, {nameColor, bg}, text::width(count) + 2);
+    row.right(count + " ", {DIM, bg});
+  }
+
+  static std::vector<std::pair<std::string_view, std::string_view>> const& hints()
+  {
+    static std::vector<std::pair<std::string_view, std::string_view>> keys = {
+        {"↑↓", "move"},
+        {"Space", "fold"},
+        {"Enter", "details"},
+        {"/", "search"},
+        {"1-5", "level"},
+        {"Tab", "mods"},
+        {"c e", "fold all"},
+        {"f", "pause"},
+        {"y", "copy"},
+        {"x", "clear"},
+        {"?", "help"},
+    };
+    return keys;
+  }
+
+  static void drawBottom(Cells& row)
+  {
+    if (s.typing)
+    {
+      row.put(" / ", {KEY_FG, BAR_BG, true});
+      row.put(s.search, {255, BAR_BG});
+      row.put("█", {KEY_FG, BAR_BG});
+      row.right("Enter keep · Esc clear ", {DIM, BAR_BG});
+      return;
+    }
+
+    if (!s.flash.empty() && std::chrono::steady_clock::now() < s.flashUntil)
+    {
+      row.put(" ✓ " + s.flash, {LIVE, BAR_BG, true});
+      return;
+    }
+
+    row.put(" ", {-1, BAR_BG});
+    for (auto [key, label] : hints())
+    {
+      if (row.left() < text::width(key) + text::width(label) + 3)
+        break;
+      row.put(key, {KEY_FG, BAR_BG, true});
+      row.put(fmt::format(" {}   ", label), {BAR_FG, BAR_BG});
+    }
+  }
+
+  static std::vector<std::string> helpLines()
+  {
+    return {
+        "",
+        "  KEYS",
+        "",
+        "  ↑ ↓  j k         move, scrolling up pauses the live view",
+        "  PgUp PgDn        a page up or down",
+        "  Home g / End G   the first line / back to live",
+        "  Space  ← →       fold or unfold a group",
+        "  Enter            fold a group, or open a log in full",
+        "  c / e            fold / unfold every group",
+        "  /                search as you type, Esc clears it",
+        "  1 2 3 4 5        show from TRACE, DEBUG, INFO, WARN or ERROR",
+        "  Tab  m           the mods list: Space hides a mod, s shows only it, a all",
+        "  y  Ctrl+C        copy the log, or the whole group on its header",
+        "  f                pause or resume the live view",
+        "  d                details panel",
+        "  x                clear the screen (the log file keeps everything)",
+        "  Esc              close the panel, clear the search, the level, back to live",
+        "",
+        "  MOUSE",
+        "",
+        "  wheel            scroll",
+        "  click            select, a header folds its group",
+        "  double click     open a log in full",
+        "  click a mod      hide or show it",
+        "",
+        "  Mode, folding, colors, pauses and filters are in the mod's settings in Geode.",
+        "  Any key closes this.",
+    };
+  }
+
+  static std::vector<std::string> detailLines(std::optional<Line> const& line, int width, std::string& title)
+  {
+    if (!line)
+    {
+      title = " Details ";
+      return {"  Nothing selected"};
+    }
+
+    auto const& group = *line->group;
+    auto modID = group.source.mod ? std::string(group.source.mod->getID()) : std::string("—");
+
+    if (!line->row)
+    {
+      title = fmt::format(" {} · {} ", group.source.name, modID);
+      return {
+          fmt::format("  {} logs in {} rows, {} warnings, {} errors", group.logs, group.rows.size(), group.warnings, group.errors),
+          fmt::format("  from {} to {} on the {} thread", group.firstTime, group.lastTime, group.source.thread.empty() ? "unnamed" : group.source.thread),
+      };
+    }
+
+    auto const& record = line->row->record;
+    title = fmt::format(" {} · {} · {} · {} · {}{} ", group.source.name, modID, group.source.thread.empty() ? "—" : group.source.thread,
+                        record.time, levelName(record.severity), line->row->count > 1 ? fmt::format(" · ×{}", line->row->count) : "");
+
+    std::vector<std::string> lines;
+    for (auto& part : text::wrap(record.content, width - 4))
+      lines.push_back("  " + part);
+    return lines;
+  }
+
+  static void render()
+  {
+    auto config = settings::get();
+    auto& model = model::get();
+
+    int height = std::max(console::windowRows(), 4);
+    int width = std::max(console::windowColumns(), 20);
+    std::vector<std::string> screen;
+    screen.reserve(height);
+
+    std::lock_guard lock(model.mutex);
+    auto lines = flatten(model);
+    int count = static_cast<int>(lines.size());
+
+    s_view.clear();
+    for (auto const& line : lines)
+      s_view.push_back(line.ref);
+
+    // The details panel takes the lower part of the screen
+    int body = height - 2;
+    std::string detailTitle;
+    std::vector<std::string> details;
+    int detailRows = 0;
+    if (s.details && !s.help)
+    {
+      details = detailLines(selectedLine(lines), width, detailTitle);
+      detailRows = std::clamp(static_cast<int>(details.size()) + 1, 3, std::max(3, body / 2));
+    }
+    int listRows = std::max(1, body - detailRows);
+
+    // Where the list starts: the end while live, around the selection otherwise
+    int top = 0;
+    int selectedIndex = -1;
+    int lastTop = std::max(0, count - listRows);
+    if (s.follow)
+      top = lastTop;
+    else
+    {
+      selectedIndex = indexOf(lines, s.selected);
+      if (selectedIndex < 0 && count > 0)
+        selectedIndex = std::clamp(s.selectedIndex, 0, count - 1);
+      top = indexOf(lines, s.top);
+      if (top < 0)
+        top = s_layout.top;
+      top = std::clamp(top, 0, lastTop);
+      if (selectedIndex >= 0)
+      {
+        if (selectedIndex < top)
+          top = selectedIndex;
+        if (selectedIndex >= top + listRows)
+          top = selectedIndex - listRows + 1;
+        s.selected = lines[selectedIndex].ref;
+      }
+      s.selectedIndex = selectedIndex;
+      if (count > 0)
+        s.top = lines[top].ref;
+    }
+
+    // Mods with the most logs first
+    s_sidebarMods.clear();
+    if (s.sidebar)
+    {
+      std::vector<model::ModStats const*> mods;
+      for (auto const& mod : model.mods)
+        mods.push_back(&mod);
+      std::ranges::stable_sort(mods, [](auto a, auto b)
+                               { return a->logs > b->logs; });
+      for (auto mod : mods)
+        s_sidebarMods.push_back(mod->name);
+      s.sidebarIndex = std::clamp(s.sidebarIndex, 0, std::max(0, static_cast<int>(mods.size()) - 1));
+    }
+    int sidebarWidth = s.sidebar ? std::min(SIDEBAR_WIDTH, width / 3) : 0;
+    int sidebarTop = s_layout.sidebarTop;
+    int sidebarRows = listRows - 1;
+    if (s.sidebarIndex < sidebarTop)
+      sidebarTop = s.sidebarIndex;
+    if (s.sidebarIndex >= sidebarTop + sidebarRows)
+      sidebarTop = s.sidebarIndex - sidebarRows + 1;
+    sidebarTop = std::max(0, sidebarTop);
+
+    s_layout = Layout{
+        .height = height,
+        .width = width,
+        .listRows = listRows,
+        .sidebarWidth = sidebarWidth,
+        .top = top,
+        .sidebarTop = sidebarTop,
+    };
+
+    Cells title(width, BAR_BG);
+    drawTitle(title, model);
+    screen.push_back(title.finish());
+
+    auto help = s.help ? helpLines() : std::vector<std::string>();
+    for (int i = 0; i < listRows; i++)
+    {
+      std::string row;
+      if (sidebarWidth)
+      {
+        Cells side(sidebarWidth - 1);
+        drawSidebarRow(side, model, i);
+        row += side.finish();
+        Cells border(1);
+        border.put("│", {BORDER});
+        row += border.finish();
+      }
+
+      Cells main(width - sidebarWidth);
+      if (s.help)
+      {
+        if (i < static_cast<int>(help.size()))
+          main.put(help[i], {i == 1 || i == 18 ? KEY_FG : 252, -1, i == 1 || i == 18});
+      }
+      else if (top + i < count)
+      {
+        auto const& line = lines[top + i];
+        bool selected = top + i == selectedIndex;
+        if (line.row)
+          drawRow(main, *config, *line.group, *line.row, selected);
+        else
+          drawHeader(main, *line.group, selected);
+      }
+      else if (count == 0 && i == 0)
+        main.put(filtering() ? "  Nothing matches. Esc clears the search and the level" : "  No logs yet", {DIM});
+      row += main.finish();
+      screen.push_back(std::move(row));
+    }
+
+    if (detailRows)
+    {
+      Cells head(width);
+      head.put("──", {BORDER});
+      head.put(detailTitle, {KEY_FG, -1, true});
+      std::string rule;
+      for (int i = 0; i < head.left(); i++)
+        rule += "─";
+      head.put(rule, {BORDER});
+      screen.push_back(head.finish());
+
+      for (int i = 0; i < detailRows - 1; i++)
+      {
+        Cells row(width);
+        bool last = i == detailRows - 2 && static_cast<int>(details.size()) > detailRows - 1;
+        if (last)
+          row.put(fmt::format("  … {} more lines, y copies it all", details.size() - i), {DIM});
+        else if (i < static_cast<int>(details.size()))
+          row.put(details[i], {252});
+        screen.push_back(row.finish());
+      }
+    }
+
+    // The last column of the last row stays empty, writing there scrolls some consoles
+    Cells bottom(width - 1, BAR_BG);
+    drawBottom(bottom);
+    screen.push_back(bottom.finish());
+
+    std::string frame = "\x1b[?25l";
+    for (size_t i = 0; i < screen.size(); i++)
+      frame += fmt::format("\x1b[{};1H{}", i + 1, screen[i]);
+    console::write(frame);
+  }
+
+  // ! --- Screen thread --- !
+
+  static void enter()
+  {
+    if (s_input == INVALID_HANDLE_VALUE)
+      s_input = CreateFileW(L"CONIN$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                            nullptr, OPEN_EXISTING, 0, nullptr);
+    if (s_input != INVALID_HANDLE_VALUE)
+    {
+      GetConsoleMode(s_input, &s_inputMode);
+      // No quick edit, so clicks reach the screen, and no Ctrl+C closing the game
+      SetConsoleMode(s_input, ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);
+      FlushConsoleInputBuffer(s_input);
+    }
+
+    console::write("\x1b[?1049h\x1b[?25l\x1b[2J");
+    s_active = true;
+    s_dirty = true;
+  }
+
+  static void leave()
+  {
+    console::write("\x1b[0m\x1b[2J\x1b[?25h\x1b[?1049l");
+    if (s_input != INVALID_HANDLE_VALUE)
+      SetConsoleMode(s_input, s_inputMode);
+    s_active = false;
+  }
+
+  static void readInput()
+  {
+    DWORD pending = 0;
+    if (!GetNumberOfConsoleInputEvents(s_input, &pending) || pending == 0)
+      return;
+
+    INPUT_RECORD records[64];
+    DWORD read = 0;
+    if (!ReadConsoleInputW(s_input, records, 64, &read))
+      return;
+
+    for (DWORD i = 0; i < read; i++)
+    {
+      switch (records[i].EventType)
+      {
+      case KEY_EVENT:
+        onKey(records[i].Event.KeyEvent);
+        break;
+      case MOUSE_EVENT:
+        onMouse(records[i].Event.MouseEvent);
+        break;
+      case WINDOW_BUFFER_SIZE_EVENT:
+        break;
+      default:
+        continue;
+      }
+      s_dirty = true;
+    }
+  }
+
+  static void run()
+  {
+    uint64_t drawnRevision = 0;
+    auto lastFrame = std::chrono::steady_clock::now();
+    bool flashing = false;
+
+    while (true)
+    {
+      bool wanted = s_wanted.load(std::memory_order::relaxed);
+      if (wanted != s_active)
+        wanted ? enter() : leave();
+
+      if (!s_active)
+      {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        continue;
+      }
+
+      if (s_input != INVALID_HANDLE_VALUE)
+      {
+        if (WaitForSingleObject(s_input, 16) == WAIT_OBJECT_0)
+          readInput();
+      }
+      else
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+
+      // The "copied" note goes away by itself
+      bool flashNow = !s.flash.empty() && std::chrono::steady_clock::now() < s.flashUntil;
+      if (flashing != flashNow)
+        s_dirty = true;
+      flashing = flashNow;
+
+      auto revision = model::get().revision.load(std::memory_order::relaxed);
+      auto now = std::chrono::steady_clock::now();
+      if ((s_dirty || revision != drawnRevision) && now - lastFrame >= FRAME_TIME)
+      {
+        render();
+        s_dirty = false;
+        drawnRevision = revision;
+        lastFrame = now;
+      }
+    }
+  }
+
+  void start()
+  {
+    if (s_started.exchange(true))
+      return;
+    std::thread(run).detach();
+  }
+
+  void setActive(bool active)
+  {
+    s_wanted.store(active && console::isOpen(), std::memory_order::relaxed);
+  }
+
+  bool isActive()
+  {
+    return s_wanted.load(std::memory_order::relaxed);
+  }
+}
