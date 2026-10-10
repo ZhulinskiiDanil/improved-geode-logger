@@ -226,6 +226,8 @@ namespace tui
 
     bool details = false;
     bool help = false;
+    // The help is taller than most console windows
+    int helpScroll = 0;
     // The details panel shows a mod's card or a text (the last crash) instead of the selected log
     std::optional<std::string> detailMod;
     std::optional<std::pair<std::string, std::string>> detailText;
@@ -1224,7 +1226,31 @@ namespace tui
 
     if (s.help)
     {
+      int page = std::max(1, s_layout.listRows - 1);
+      switch (key.wVirtualKeyCode)
+      {
+      case VK_UP:
+        s.helpScroll = std::max(0, s.helpScroll - 1);
+        return;
+      case VK_DOWN:
+        s.helpScroll++;
+        return;
+      case VK_PRIOR:
+        s.helpScroll = std::max(0, s.helpScroll - page);
+        return;
+      case VK_NEXT:
+      case VK_SPACE:
+        s.helpScroll += page;
+        return;
+      case VK_HOME:
+        s.helpScroll = 0;
+        return;
+      default:
+        break;
+      }
+      // Anything else closes it, like before
       s.help = false;
+      s.helpScroll = 0;
       return;
     }
 
@@ -1521,9 +1547,11 @@ namespace tui
       int index = s_layout.sidebarTop + listRow - 1;
       if (listRow == 0 || index >= static_cast<int>(s_sidebarMods.size()))
         return;
+      // A click picks the mod, hiding it takes a double click (or Space): one stray click hid mods
       s.sidebarFocus = true;
       s.sidebarIndex = index;
-      toggleMod(index);
+      if (doubleClick)
+        toggleMod(index);
       return;
     }
 
@@ -1544,6 +1572,13 @@ namespace tui
   {
     int x = mouse.dwMousePosition.X;
     int y = mouse.dwMousePosition.Y - console::windowTop();
+
+    if (mouse.dwEventFlags & MOUSE_WHEELED && s.help)
+    {
+      auto delta = static_cast<short>(HIWORD(mouse.dwButtonState));
+      s.helpScroll = std::max(0, s.helpScroll + (delta > 0 ? -3 : 3));
+      return;
+    }
 
     if (mouse.dwEventFlags & MOUSE_WHEELED)
     {
@@ -1988,10 +2023,10 @@ namespace tui
         "  click            select, a header folds its group",
         "  double click     open a log in full",
         "  right click      copy the line",
-        "  click a mod      hide or show it",
+        "  click a mod      pick it, a double click hides or shows it",
         "",
         "  Mode, folding, colors, pauses and filters are in the mod's settings in Geode.",
-        "  Any key closes this.",
+        "  Up, Down, the wheel and Page Down scroll this, any other key closes it.",
     };
   }
 
@@ -2191,6 +2226,10 @@ namespace tui
     }
 
     auto help = s.help ? helpLines() : std::vector<std::string>();
+    // The last line stays at the bottom when scrolled all the way down
+    s.helpScroll = std::clamp(s.helpScroll, 0, std::max(0, static_cast<int>(help.size()) - listRows));
+    if (s.help && s.helpScroll > 0)
+      help.erase(help.begin(), help.begin() + s.helpScroll);
     for (int i = 0; i < listRows; i++)
     {
       std::string row;

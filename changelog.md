@@ -10,6 +10,8 @@
 - `Shift+R` restarts a minimized game too: it stopped its loop and never got to the restart
 - Keys like `R`, `b` and `?` work in the mods list too
 - The console window's title says Improved Logger instead of the game's path
+- The help scrolls (Up, Down, the wheel, Page Down): it was cut off in smaller windows
+- A click on a mod in the list picks it, a double click hides it (a stray click hid mods)
 - Tests for the folding of repeats, the search and the reading of log files, run in CI
 
 # v1.4.0
