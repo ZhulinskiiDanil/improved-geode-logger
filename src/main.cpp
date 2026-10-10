@@ -10,6 +10,29 @@
 
 using namespace geode::prelude;
 
+// ! --- First launch --- !
+
+// Without Geode's console there is nothing to show: once, offer to turn it on
+$on_game(Loaded)
+{
+  if (console::isOpen() || Mod::get()->getSavedValue<bool>("asked-for-console", false))
+    return;
+  Mod::get()->setSavedValue("asked-for-console", true);
+
+  createQuickPopup(
+      "Improved Logger",
+      "The logs show up in Geode's console window, which is off. Turn on <cy>Show Platform Console</c> and restart the game?",
+      "Not now", "Turn on",
+      [](auto, bool turnOn)
+      {
+        auto geode = Loader::get()->getInstalledMod("geode.loader");
+        if (!turnOn || !geode)
+          return;
+        geode->setSettingValue<bool>("show-platform-console", true);
+        game::restart(true);
+      });
+}
+
 // ! --- Start --- !
 
 $on_mod(Loaded)

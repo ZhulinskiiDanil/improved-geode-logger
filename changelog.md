@@ -1,3 +1,8 @@
+# v1.4.1
+
+- On the first launch without Geode's console, a popup offers to turn it on and restart
+- Tests for the folding of repeats, the search and the reading of log files, run in CI
+
 # v1.4.0
 
 - The interactive console starts with what Geode logged before the mod loaded, read from the log file
