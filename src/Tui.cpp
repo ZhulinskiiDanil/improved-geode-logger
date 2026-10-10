@@ -10,6 +10,7 @@
 #include <Geode/Geode.hpp>
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <regex>
 #include <set>
 #include <thread>
@@ -39,6 +40,8 @@ namespace tui
   static constexpr int SIDEBAR_WIDTH = 30;
   static constexpr auto FRAME_TIME = std::chrono::milliseconds(33);
   static constexpr int BANNER_REBUILT = 0;
+  // Logs a second from which a mod counts as noisy in the mods list
+  static constexpr double NOISY_RATE = 5.0;
   static constexpr int BANNER_CRASH = 1;
 
   struct Style
@@ -684,6 +687,46 @@ namespace tui
       text.pop_back();
     copyToClipboard(text);
     flash(fmt::format("Copied {}{}", lines == 1 ? std::string("the log") : fmt::format("{} logs", lines), markdown ? " as Markdown" : ""));
+  }
+
+  // Every warning and error of the session as Markdown, grouped by mod, for a bug report
+  static void copyProblems()
+  {
+    auto& model = viewModel();
+    std::map<std::string, std::vector<std::string>> byMod;
+    int problems = 0;
+    {
+      std::lock_guard lock(model.mutex);
+      for (auto const& group : model.groups)
+      {
+        if (group.marker)
+          continue;
+        for (auto const& row : group.rows)
+        {
+          if (row.record.severity < Severity::Warning)
+            continue;
+          byMod[group.source.name].push_back(formatRow(group, row));
+          problems++;
+        }
+      }
+    }
+
+    if (problems == 0)
+    {
+      flash("No warnings or errors to copy");
+      return;
+    }
+
+    std::string text;
+    for (auto const& [mod, lines] : byMod)
+    {
+      text += fmt::format("**{}** · {} {}\n```\n", mod, lines.size(), lines.size() == 1 ? "problem" : "problems");
+      for (auto const& line : lines)
+        text += line + "\n";
+      text += "```\n";
+    }
+    copyToClipboard(text);
+    flash(fmt::format("Copied {} warnings and errors from {} mods as Markdown", problems, byMod.size()));
   }
 
   static std::filesystem::path exportsDir()
@@ -1408,6 +1451,9 @@ namespace tui
     case L'Y':
       copySelection(true);
       break;
+    case L'E':
+      copyProblems();
+      break;
     case L'w':
       exportView();
       break;
@@ -1510,7 +1556,23 @@ namespace tui
 
     bool pressed = mouse.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED;
     bool wasPressed = s_buttons & FROM_LEFT_1ST_BUTTON_PRESSED;
+    bool rightPressed = mouse.dwButtonState & RIGHTMOST_BUTTON_PRESSED;
+    bool rightWasPressed = s_buttons & RIGHTMOST_BUTTON_PRESSED;
     s_buttons = mouse.dwButtonState;
+
+    // A right click copies the line under it, like a quick y
+    if (rightPressed && !rightWasPressed)
+    {
+      int index = s_layout.top + y - s_layout.listTop;
+      if (x >= s_layout.sidebarWidth && y >= s_layout.listTop && y - s_layout.listTop < s_layout.listRows &&
+          index < static_cast<int>(s_view.size()))
+      {
+        pause();
+        select(index);
+        copySelection();
+      }
+      return;
+    }
 
     if (mouse.dwEventFlags & DOUBLE_CLICK)
       onClick(x, y, true);
@@ -1745,13 +1807,17 @@ namespace tui
     else if (stats->mod)
       level = std::string(levelName(stats->mod->getLogLevel()).substr(0, 1)) + " ";
 
-    auto count = compact(stats->logs);
+    // A mod writing many logs a second shows its rate instead of its count
+    auto now = static_cast<int64_t>(asp::SystemTime::now().timeSinceEpoch().millis());
+    auto rate = stats->rate(now);
+    bool noisy = rate >= NOISY_RATE;
+    auto count = noisy ? fmt::format("{:.0f}/s", rate) : compact(stats->logs);
     int nameColor = hidden ? DIM : stats->errors ? ERROR_COLOR : stats->warnings ? WARNING_COLOR : 252;
     int tail = text::width(count) + text::width(level) + 1;
     row.put(stats->name, {nameColor, bg}, tail + 1);
     row.pad(row.used() + row.left() - tail, {-1, bg});
     row.put(level, {levelColor, bg});
-    row.right(count + " ", {DIM, bg});
+    row.right(count + " ", {noisy ? PAUSED : DIM, bg, noisy});
   }
 
   static std::vector<std::pair<std::string_view, std::string_view>> const& hints()
@@ -1885,6 +1951,7 @@ namespace tui
         "  v                show or hide the values mods watch through the API",
         "  w / W            save what the filters show to a file / open the folder",
         "  Y                copy as Markdown, for a bug report",
+        "  E                copy every warning and error, by mod, as Markdown",
         "",
         "  MODS LIST",
         "",
@@ -1898,6 +1965,7 @@ namespace tui
         "  wheel            scroll",
         "  click            select, a header folds its group",
         "  double click     open a log in full",
+        "  right click      copy the line",
         "  click a mod      hide or show it",
         "",
         "  Mode, folding, colors, pauses and filters are in the mod's settings in Geode.",

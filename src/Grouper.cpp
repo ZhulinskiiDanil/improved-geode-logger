@@ -444,7 +444,7 @@ namespace grouper
     Lines out(escapeCodes);
     out.end();
     out.color(color);
-    out.escape("[1m");
+    out.escape("\x1b[1m");
     out.text("──── ");
     out.text(text);
     out.text(" ");
