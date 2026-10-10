@@ -29,6 +29,9 @@ namespace console
   void showConsole();
   void showGame();
 
+  // Closing the console window closes the game too, without saving: its close button can be turned off
+  void setClosable(bool closable);
+
   // While off, Geode writes to the console as usual
   void setGrouping(bool enabled);
   bool isGrouping();

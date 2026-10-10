@@ -23,6 +23,8 @@ namespace settings
     bool threadGroups = false;
     bool modColors = true;
     bool nestGuides = true;
+    // The console window's close button is off, closing it would close the game without saving
+    bool keepOpen = true;
     // Logs from this level up pop up in the game, above Error means never
     int toastLevel = 3;
     double gapSeconds = 1.5;

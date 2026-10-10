@@ -206,6 +206,15 @@ namespace console
     bringForward(game);
   }
 
+  void setClosable(bool closable)
+  {
+    // Windows Terminal owns its tabs, only the classic console window has this button
+    auto window = GetConsoleWindow();
+    auto menu = window ? GetSystemMenu(window, FALSE) : nullptr;
+    if (menu)
+      EnableMenuItem(menu, SC_CLOSE, MF_BYCOMMAND | (closable ? MF_ENABLED : MF_GRAYED));
+  }
+
   void setGrouping(bool enabled)
   {
     s_grouping.store(enabled && isOpen(), std::memory_order::relaxed);

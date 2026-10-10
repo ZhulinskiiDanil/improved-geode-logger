@@ -78,6 +78,12 @@
 				"slider-step": 0.5
 			}
 		},
+		"keep-open": {
+			"name": "Keep the console open",
+			"description": "Turns off the console window's close button: closing it closes the game too, without saving. Exit the game as usual instead. Windows Terminal tabs can still be closed",
+			"type": "bool",
+			"default": true
+		},
 		"toasts": {
 			"name": "Pop-ups in the game",
 			"description": "Errors (and warnings, if you want) show up as a notification in the game, so they aren't missed while the console is behind it. One every few seconds at most. With focused mods, only theirs",

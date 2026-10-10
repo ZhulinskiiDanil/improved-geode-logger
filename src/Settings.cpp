@@ -63,6 +63,7 @@ namespace settings
     config->threadGroups = mod->getSettingValue<bool>("thread-groups");
     config->modColors = mod->getSettingValue<bool>("mod-colors");
     config->nestGuides = mod->getSettingValue<bool>("nest-guides");
+    config->keepOpen = mod->getSettingValue<bool>("keep-open");
     auto toasts = mod->getSettingValue<std::string>("toasts");
     config->toastLevel = toasts == "Off" ? Severity::Error + 1 : toasts == "Errors and warnings" ? Severity::Warning : Severity::Error;
     config->gapSeconds = mod->getSettingValue<double>("gap");
@@ -82,6 +83,7 @@ namespace settings
   {
     auto config = read();
     console::setGrouping(config->enabled);
+    console::setClosable(!config->keepOpen);
     bool interactive = config->enabled && config->interactive;
 
     {
