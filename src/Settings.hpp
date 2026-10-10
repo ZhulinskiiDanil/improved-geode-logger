@@ -19,6 +19,8 @@ namespace settings
     // A full screen to browse the logs, or lines printed as they come
     bool interactive = true;
     bool groupByMod = true;
+    // Another thread of the same mod gets its own group, otherwise it's named on its lines
+    bool threadGroups = false;
     bool modColors = true;
     bool nestGuides = true;
     // Logs from this level up pop up in the game, above Error means never

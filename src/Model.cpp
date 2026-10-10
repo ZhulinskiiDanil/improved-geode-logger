@@ -109,7 +109,7 @@ namespace model
     stats.warnings += severity == Severity::Warning;
     stats.errors += severity >= Severity::Error;
 
-    bool sameGroup = !groups.empty() && !groups.back().marker && groups.back().source == record.source && !pause;
+    bool sameGroup = !groups.empty() && !groups.back().marker && sameBlock(groups.back().source, record.source, config.threadGroups) && !pause;
     if (!sameGroup)
     {
       groups.push_back(Group{.id = m_nextGroup++, .source = record.source, .color = record.color, .firstTime = record.time, .startMillis = record.millis});

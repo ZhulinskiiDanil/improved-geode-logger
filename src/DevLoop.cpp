@@ -122,9 +122,20 @@ namespace devloop
   static constexpr auto TOAST_GAP = std::chrono::seconds(3);
   static std::optional<std::chrono::steady_clock::time_point> s_lastToast;
   static int s_skippedToasts = 0;
+  // While the game loads, Geode's own errors are the ones its problems list already shows,
+  // like a setting a mod update added ("not found in savedata")
+  static std::atomic<bool> s_gameLoaded = false;
+
+  $on_game(Loaded)
+  {
+    s_gameLoaded = true;
+  }
 
   void toast(std::string const& mod, int severity, std::string_view message)
   {
+    if (!s_gameLoaded && mod == "Geode")
+      return;
+
     std::string text;
     {
       std::lock_guard lock(s_mutex);

@@ -60,6 +60,7 @@ namespace settings
     config->enabled = mod->getSettingValue<bool>("enabled");
     config->interactive = mod->getSettingValue<std::string>("mode") == "Interactive";
     config->groupByMod = mod->getSettingValue<bool>("group-by-mod");
+    config->threadGroups = mod->getSettingValue<bool>("thread-groups");
     config->modColors = mod->getSettingValue<bool>("mod-colors");
     config->nestGuides = mod->getSettingValue<bool>("nest-guides");
     auto toasts = mod->getSettingValue<std::string>("toasts");

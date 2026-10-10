@@ -48,6 +48,12 @@
 			"type": "bool",
 			"default": true
 		},
+		"thread-groups": {
+			"name": "Separate threads",
+			"description": "Logs from another thread of the same mod get their own group. Off: one group per mod, and the lines from threads other than Main show the thread's name",
+			"type": "bool",
+			"default": false
+		},
 		"mod-colors": {
 			"name": "Mod colors",
 			"description": "Each mod gets its own color for its header and the line on the left of its logs",

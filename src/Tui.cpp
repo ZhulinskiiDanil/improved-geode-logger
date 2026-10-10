@@ -1631,12 +1631,12 @@ namespace tui
     }
   }
 
-  static void drawHeader(Cells& row, model::Group const& group, bool selected)
+  static void drawHeader(Cells& row, settings::Config const& config, model::Group const& group, bool selected)
   {
     int bg = selected ? SELECT_BG : -1;
     row.put(group.collapsed ? " ▸ " : " ▾ ", {group.color, bg, true});
     row.put(group.source.name, {group.color, bg, true});
-    if (look::showsThread(group.source.thread))
+    if (config.threadGroups && look::showsThread(group.source.thread))
       row.put(fmt::format(" · {}", group.source.thread), {DIM, bg});
 
     row.put(fmt::format("   {} {}", group.logs, group.logs == 1 ? "log" : "logs"), {DIM, bg});
@@ -1753,6 +1753,10 @@ namespace tui
     row.put(" ", {-1, bg});
     row.put(look::severityName(record.severity), {prefixColor, bg, record.severity >= Severity::Warning});
     row.put(" ", {-1, bg});
+
+    // Threads share the mod's group: the ones other than Main are named on their lines
+    if (!config.threadGroups && look::showsThread(record.source.thread))
+      row.put(fmt::format("[{}] ", record.source.thread), {look::GUIDE_COLOR, bg});
 
     if (record.nest > 0)
     {
@@ -2023,7 +2027,7 @@ namespace tui
     }
 
     auto const& record = line->row->record;
-    title = fmt::format(" {} · {} · {} · {} · {}{} ", group.source.name, modID, group.source.thread.empty() ? "—" : group.source.thread,
+    title = fmt::format(" {} · {} · {} · {} · {}{} ", group.source.name, modID, record.source.thread.empty() ? "—" : record.source.thread,
                         record.time, levelName(record.severity), line->row->count > 1 ? fmt::format(" · ×{}", line->row->count) : "");
 
     std::vector<std::string> lines;
@@ -2200,7 +2204,7 @@ namespace tui
         else if (line.row)
           drawRow(main, *config, *line.group, *line.row, timeFor(lines, top + i), selected);
         else
-          drawHeader(main, *line.group, selected);
+          drawHeader(main, *config, *line.group, selected);
       }
       else if (count == 0 && i == 0)
         main.put(filtering() ? "  Nothing matches. Esc clears the search and the level" : "  No logs yet", {DIM});

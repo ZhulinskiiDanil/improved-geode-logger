@@ -25,6 +25,12 @@ struct Source
   bool operator==(Source const&) const = default;
 };
 
+// Logs one after another from the same mod share a group, from the same thread too when threads are split
+inline bool sameBlock(Source const& a, Source const& b, bool threads)
+{
+  return a.mod == b.mod && a.name == b.name && (!threads || a.thread == b.thread);
+}
+
 // One log, already formatted for showing
 struct Record
 {

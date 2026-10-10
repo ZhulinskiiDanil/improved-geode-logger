@@ -120,7 +120,7 @@ namespace grouper
 
   // ! --- Printing --- !
 
-  static void printHeader(Lines& out, Entry const& entry, int columns)
+  static void printHeader(Lines& out, Entry const& entry, int columns, bool threads)
   {
     out.color(entry.color);
     out.escape("\x1b[1m");
@@ -128,7 +128,7 @@ namespace grouper
     out.text(entry.source.name);
     out.reset();
 
-    if (look::showsThread(entry.source.thread))
+    if (threads && look::showsThread(entry.source.thread))
     {
       out.color(GUIDE_COLOR);
       out.text(" · ");
@@ -176,6 +176,14 @@ namespace grouper
     out.text(look::severityName(entry.severity));
     out.reset();
     out.text(" ");
+
+    // Threads share the mod's group: the ones other than Main are named on their lines
+    if (config.groupByMod && !config.threadGroups && look::showsThread(entry.source.thread))
+    {
+      out.color(GUIDE_COLOR);
+      out.text(fmt::format("[{}] ", entry.source.thread));
+      out.reset();
+    }
 
     if (!config.groupByMod)
     {
@@ -415,10 +423,10 @@ namespace grouper
     if (pause)
       out.end();
 
-    if (pause || s_block != entry.source)
+    if (pause || !s_block || !sameBlock(*s_block, entry.source, config->threadGroups))
     {
       if (config->groupByMod)
-        printHeader(out, entry, columns);
+        printHeader(out, entry, columns, config->threadGroups);
       s_entries.clear();
       s_cycle.reset();
     }
