@@ -32,6 +32,7 @@ Download `zhulis.improved-logger.geode` from the [releases](https://github.com/Z
 | `E` | Copy every warning and error, by mod, as Markdown |
 | `` ` ``, `Ctrl+Shift+L` in the game | Back to the game, back to the console |
 | `w`, `W` | Save what the filters show to a file, open the folder |
+| `H` | Save it as a page for a browser: groups fold, levels in color, a filter box |
 | `v` | Show or hide the watched values |
 | `f`, `x`, `?` | Pause, clear the screen, help |
 

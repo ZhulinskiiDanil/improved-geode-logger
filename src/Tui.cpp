@@ -2,6 +2,7 @@
 #include "Console.hpp"
 #include "DevLoop.hpp"
 #include "History.hpp"
+#include "Html.hpp"
 #include "Look.hpp"
 #include "Model.hpp"
 #include "Search.hpp"
@@ -653,6 +654,34 @@ namespace tui
       return;
     }
     flash(fmt::format("Saved {} logs to {} · W opens the folder", logs, path.filename().string()));
+  }
+
+  // A page to open in a browser or send to someone: groups fold, levels in color, a filter box
+  static void exportHtml()
+  {
+    auto& model = viewModel();
+    auto now = asp::localtime(asp::SystemTime::now().to_time_t());
+    auto name = fmt::format("{} {:%Y-%m-%d %H.%M.%S}.html", s.historyName ? "old log" : "logs", now);
+    std::string page;
+    {
+      std::lock_guard lock(model.mutex);
+      page = html::render(model, {
+                                     .title = s.historyName ? fmt::format("Geometry Dash logs · {}", *s.historyName) : fmt::format("Geometry Dash logs · {:%Y-%m-%d %H:%M}", now),
+                                     .keepGroup = [](model::Group const& group)
+                                     { return !s.hiddenMods.contains(group.source.name); },
+                                     .keepRow = [](Record const& record)
+                                     { return passes(record); },
+                                 });
+    }
+
+    std::error_code error;
+    std::filesystem::create_directories(exportsDir(), error);
+    if (auto result = file::writeString(exportsDir() / name, page); !result)
+    {
+      flash(fmt::format("Can't save: {}", result.unwrapErr()));
+      return;
+    }
+    flash(fmt::format("Saved {} · open it in a browser, W opens the folder", name));
   }
 
   // ! --- Older logs --- !
@@ -1486,6 +1515,9 @@ namespace tui
     case L'w':
       exportView();
       break;
+    case L'H':
+      exportHtml();
+      break;
     case L'W':
     {
       std::error_code error;
@@ -2027,6 +2059,7 @@ namespace tui
         "  L                open an older log file of Geode, Esc goes back to live",
         "  v                show or hide the values mods watch through the API",
         "  w / W            save what the filters show to a file / open the folder",
+        "  H                save it as a page for a browser, with folding groups and a filter",
         "  Y                copy as Markdown, for a bug report",
         "  E                copy every warning and error, by mod, as Markdown",
         "  `                back to the game, Ctrl+Shift+L in the game comes back here",

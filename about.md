@@ -13,7 +13,7 @@ The console becomes a screen to browse the logs:
 - **Mods**: <cy>Tab</c> opens the list of mods with their counts. Hide a mod, or show only it. Hidden mods, the level, the time format and the panels stay as you left them next time.
 - **Details**: <cy>Enter</c> opens a log in full, <cy>y</c>, <cy>Ctrl+C</c> or a right click copies it, <cy>Y</c> copies it as Markdown for a bug report, <cy>E</c> copies every warning and error by mod.
 - **Older logs**: <cy>L</c> opens one of Geode's earlier log files right in the console, with the same groups, search and filters.
-- **Save**: <cy>w</c> writes what the filters show to a file, <cy>W</c> opens the folder.
+- **Save and share**: <cy>w</c> writes what the filters show to a file, <cy>H</c> to a page for a browser with folding groups and a filter, <cy>W</c> opens the folder.
 - **Live or paused**: scrolling up pauses the view, the top bar counts the new logs and errors, <cy>End</c> goes back to them.
 - **Mouse**: the wheel scrolls, a click selects or folds, a double click opens a log.
 

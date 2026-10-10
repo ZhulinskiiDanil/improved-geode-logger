@@ -18,3 +18,6 @@ add_test(NAME logline COMMAND logline-tests)
 
 add_executable(model-tests ModelTests.cpp ../src/Model.cpp ../src/Text.cpp)
 add_test(NAME model COMMAND model-tests)
+
+add_executable(html-tests HtmlTests.cpp ../src/Html.cpp ../src/Model.cpp ../src/Text.cpp)
+add_test(NAME html COMMAND html-tests)
