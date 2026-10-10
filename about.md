@@ -8,7 +8,7 @@ The console becomes a screen to browse the logs:
 
 - **Groups**: logs that come one after another from the same mod sit in one group with its name, count, warnings and errors. Fold and unfold them with <cy>Space</c>, all at once with <cy>c</c> and <cy>e</c>. Lines from threads other than Main show the thread's name.
 - **From the start**: the screen begins with what Geode logged before the mod loaded, read from the log file.
-- **Search**: <cy>/</c> filters as you type and marks the matches, <cy>Up</c> and <cy>Down</c> bring back earlier searches. All words must match, `-word` must not, `"a phrase"` keeps its spaces, and `mod:`, `thread:`, `level:warn` and `re:` (a regex) look at one thing.
+- **Search**: <cy>/</c> or <cy>Ctrl+F</c> filters as you type and marks the matches, <cy>Up</c> and <cy>Down</c> bring back earlier searches. All words must match, `-word` must not, `"a phrase"` keeps its spaces, and `mod:`, `thread:`, `level:warn` and `re:` (a regex) look at one thing.
 - **Levels**: <cy>1</c> to <cy>5</c> show from TRACE, DEBUG, INFO, WARN or ERROR up.
 - **Mods**: <cy>Tab</c> opens the list of mods with their counts. Hide a mod, or show only it. Hidden mods, the level, the time format and the panels stay as you left them next time.
 - **Details**: <cy>Enter</c> opens a log in full, <cy>y</c>, <cy>Ctrl+C</c> or a right click copies it, <cy>Y</c> copies it as Markdown for a bug report, <cy>E</c> copies every warning and error by mod.

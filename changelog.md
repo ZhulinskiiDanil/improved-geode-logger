@@ -1,3 +1,7 @@
+# v1.5.2
+
+- `Ctrl+F` searches too, like `/`
+
 # v1.5.1
 
 - The console window's title counts the errors of the session, so the taskbar shows them while the console is behind the game

@@ -1307,6 +1307,13 @@ namespace tui
       return;
     }
 
+    // Ctrl+F searches like / does, it's what the fingers know from everywhere else
+    if (ctrl && key.wVirtualKeyCode == 'F')
+    {
+      s.typing = true;
+      return;
+    }
+
     if (s.sidebarFocus && onSidebarKey(key, c))
       return;
 
@@ -2072,7 +2079,7 @@ namespace tui
         "  Space  ← →       fold or unfold a group",
         "  Enter            fold a group, or open a log in full",
         "  c / e            fold / unfold every group",
-        "  /                search as you type, Esc clears it. Words must all match,",
+        "  /  Ctrl+F        search as you type, Esc clears it. Words must all match,",
         "                   -word must not, \"a phrase\", mod:name thread:name level:warn re:regex",
         "  1 2 3 4 5        show from TRACE, DEBUG, INFO, WARN or ERROR",
         "  Tab  m           the mods list: Space hides a mod, s shows only it, a all",

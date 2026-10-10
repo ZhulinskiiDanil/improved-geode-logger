@@ -5,7 +5,7 @@
 	},
 	"id": "zhulis.improved-logger",
 	"name": "Improved Logger",
-	"version": "v1.5.1",
+	"version": "v1.5.2",
 	"developer": "Zhulis",
 	"early-load": true,
 	"load-priority": "first",
