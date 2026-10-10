@@ -193,6 +193,8 @@ namespace tui
     SincePrevious,
     // Since the first log of its group
     SinceGroup,
+    // Since the marker above it: put one, do something, see how long each step took
+    SinceMarker,
   };
 
   // What the details panel says about a mod, gathered on the main thread where hooks live
@@ -232,6 +234,8 @@ namespace tui
 
     // Mods whose logs are hidden here, by name, kept between launches
     std::set<std::string> hiddenMods;
+    // Only what came after the last marker
+    bool sinceMarker = false;
     bool watchPanel = true;
 
     // An older log file instead of the live logs
@@ -309,9 +313,24 @@ namespace tui
   static std::vector<Line> flatten(model::Model& model)
   {
     std::vector<Line> lines;
+
+    // The last marker's group, everything before it stays out
+    uint64_t firstGroup = 0;
+    if (s.sinceMarker)
+    {
+      for (auto it = model.groups.rbegin(); it != model.groups.rend(); ++it)
+      {
+        if (it->marker)
+        {
+          firstGroup = it->id;
+          break;
+        }
+      }
+    }
+
     for (auto& group : model.groups)
     {
-      if (s.hiddenMods.contains(group.source.name))
+      if (group.id < firstGroup || s.hiddenMods.contains(group.source.name))
         continue;
 
       auto start = lines.size();
@@ -710,7 +729,7 @@ namespace tui
   {
     auto mod = Mod::get();
     s.minLevel = std::clamp(mod->getSavedValue<int>("ui-level", Severity::Trace), static_cast<int>(Severity::Trace), static_cast<int>(Severity::Error));
-    s.timeMode = static_cast<TimeMode>(std::clamp(mod->getSavedValue<int>("ui-time", 0), 0, 2));
+    s.timeMode = static_cast<TimeMode>(std::clamp(mod->getSavedValue<int>("ui-time", 0), 0, 3));
     s.sidebar = mod->getSavedValue<bool>("ui-sidebar", false);
     s.watchPanel = mod->getSavedValue<bool>("ui-watches", true);
     for (auto const& name : mod->getSavedValue<std::vector<std::string>>("ui-hidden", {}))
@@ -826,6 +845,8 @@ namespace tui
       return "since the log before";
     case TimeMode::SinceGroup:
       return "since the group's start";
+    case TimeMode::SinceMarker:
+      return "since the marker above";
     default:
       return "clock";
     }
@@ -835,6 +856,7 @@ namespace tui
   {
     s.timeMode = s.timeMode == TimeMode::Clock           ? TimeMode::SincePrevious
                  : s.timeMode == TimeMode::SincePrevious ? TimeMode::SinceGroup
+                 : s.timeMode == TimeMode::SinceGroup    ? TimeMode::SinceMarker
                                                          : TimeMode::Clock;
     flash(fmt::format("Time: {}", timeModeName(s.timeMode)));
     saveState();
@@ -1305,6 +1327,8 @@ namespace tui
         s.minLevel = Severity::Trace;
         saveState();
       }
+      else if (s.sinceMarker)
+        s.sinceMarker = false;
       else if (s.historyName)
         closeHistory();
       else if (!s.follow)
@@ -1399,6 +1423,10 @@ namespace tui
       break;
     case L'E':
       copyProblems();
+      break;
+    case L'M':
+      s.sinceMarker = !s.sinceMarker;
+      flash(s.sinceMarker ? "Only after the last marker, M shows everything again" : "Showing everything");
       break;
     case L'`':
       console::showGame();
@@ -1556,6 +1584,8 @@ namespace tui
       row.put(fmt::format("   │  {} hidden", hidden), {KEY_FG, BAR_BG});
     if (s.timeMode != TimeMode::Clock)
       row.put(fmt::format("   │  time {}", timeModeName(s.timeMode)), {KEY_FG, BAR_BG});
+    if (s.sinceMarker)
+      row.put("   │  after the last marker", {KEY_FG, BAR_BG});
 
     if (s.historyName)
       row.right(fmt::format("◀ {} · Esc back to live ", *s.historyName), {PAUSED, BAR_BG, true});
@@ -1644,6 +1674,14 @@ namespace tui
       return "";
     case TimeMode::SinceGroup:
       return span(record.millis - lines[index].group->startMillis);
+    case TimeMode::SinceMarker:
+      for (int i = index - 1; i >= 0; i--)
+      {
+        if (lines[i].group->marker)
+          return span(record.millis - lines[i].group->startMillis);
+      }
+      // No marker above yet: the clock
+      return record.time;
     default:
       return record.time;
     }
@@ -1897,7 +1935,8 @@ namespace tui
         "  b                a marker line, also from the game with the keybind in the settings",
         "  n / N            the next / previous warning, error or marker",
         "  ] / [            the next / previous group",
-        "  t                time: clock, since the log before, since the group's start",
+        "  t                time: clock, since the log before, the group's start, the marker above",
+        "  M                only what came after the last marker",
         "  Shift+R          restart the game, the banner says when a .geode was rebuilt",
         "  o                open the crash log of the last session",
         "  L                open an older log file of Geode, Esc goes back to live",

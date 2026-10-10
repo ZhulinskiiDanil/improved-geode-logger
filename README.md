@@ -20,7 +20,8 @@ Download `zhulis.improved-logger.geode` from the [releases](https://github.com/Z
 | `Tab`, `m` | The mods list: `Space` hides a mod, `s` shows only it, `a` all, `+` `-` change its log level, `l` turns its logging off, `0` back to everything (levels stay for the next launches), `Enter` opens its card |
 | `b`, `Ctrl+Shift+M` in the game | A marker line |
 | `n` `N`, `]` `[` | Next / previous warning, error or marker, next / previous group |
-| `t` | Time: clock, since the log before, since the group's start |
+| `t` | Time: clock, since the log before, since the group's start, since the marker above |
+| `M` | Only what came after the last marker |
 | `Shift+R` | Restart the game, a banner says when a `.geode` was rebuilt (a click on it works too) |
 | `o` | The crash log of the last session (or a click on its banner) |
 | `L` | An older log file of Geode |
