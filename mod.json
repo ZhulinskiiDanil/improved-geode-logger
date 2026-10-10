@@ -5,7 +5,7 @@
 	},
 	"id": "zhulis.improved-logger",
 	"name": "Improved Logger",
-	"version": "v1.1.0",
+	"version": "v1.2.0",
 	"developer": "Zhulis",
 	"early-load": true,
 	"load-priority": "first",
@@ -66,6 +66,13 @@
 				"slider": true,
 				"slider-step": 0.5
 			}
+		},
+		"marker-key": {
+			"name": "Marker key",
+			"description": "Puts a marker line into the logs from the game, to see what got logged after you did something. <cy>b</c> does the same in the console",
+			"type": "keybind",
+			"default": "Ctrl+Shift+M",
+			"category": "universal"
 		},
 		"collapse-title": {
 			"type": "title",

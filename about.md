@@ -16,6 +16,15 @@ The console becomes a screen to browse the logs:
 
 Press <cy>?</c> in the console for every key.
 
+## For making mods
+
+- **Markers**: <cy>b</c> in the console, or <cy>Ctrl+Shift+M</c> in the game, puts a marker line into the logs. Do something in the game, and everything logged after it is right under the marker. <cy>n</c> jumps between markers, warnings and errors.
+- **Rebuilt mods**: when a `.geode` in the mods folder changes (`geode build` installs it), a banner says so and <cy>Shift+R</c> restarts the game.
+- **Last crash**: if the last session crashed, a banner offers its crash log, <cy>o</c> opens it right in the console.
+- **Time between logs**: <cy>t</c> shows the time since the log before, or since the group's start, to measure how long things take.
+- **Log levels on the fly**: in the mods list <cy>+</c> and <cy>-</c> change how much a mod logs, <cy>l</c> turns its logging off.
+- **Mod cards**: <cy>Enter</c> on a mod shows its version, hooks, patches and how many logs a second it writes.
+
 ## Both modes
 
 - **Folds repeats**: a line written again and again stays one line with a counter (`×40`). In *Similar* mode lines that differ only in numbers fold too and show the latest values. Repeating blocks of up to 4 lines (like `Loading X` + `Loaded X`) fold as a whole.

@@ -1,4 +1,5 @@
 #include "Console.hpp"
+#include "DevLoop.hpp"
 #include "Grouper.hpp"
 #include "Settings.hpp"
 #include "Tui.hpp"
@@ -24,4 +25,11 @@ $on_mod(Loaded)
 
   tui::start();
   settings::load();
+  devloop::start();
+
+  // A marker straight from the game, without going to the console
+  listenForKeybindSettingPresses("marker-key", [](Keybind const&, bool down, bool repeat, double)
+                                 {
+                                   if (down && !repeat)
+                                     devloop::addMarker(); });
 }

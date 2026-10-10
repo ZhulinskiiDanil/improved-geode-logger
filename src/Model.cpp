@@ -102,16 +102,17 @@ namespace model
 
     auto [it, added] = m_modIndex.try_emplace(record.source.name, mods.size());
     if (added)
-      mods.push_back(ModStats{.name = record.source.name, .color = record.color});
+      mods.push_back(ModStats{.name = record.source.name, .mod = record.source.mod, .color = record.color});
     auto& stats = mods[it->second];
     stats.logs++;
+    stats.count(record.millis);
     stats.warnings += severity == Severity::Warning;
     stats.errors += severity >= Severity::Error;
 
-    bool sameGroup = !groups.empty() && groups.back().source == record.source && !pause;
+    bool sameGroup = !groups.empty() && !groups.back().marker && groups.back().source == record.source && !pause;
     if (!sameGroup)
     {
-      groups.push_back(Group{.id = m_nextGroup++, .source = record.source, .color = record.color, .firstTime = record.time});
+      groups.push_back(Group{.id = m_nextGroup++, .source = record.source, .color = record.color, .firstTime = record.time, .startMillis = record.millis});
       m_cycle.reset();
       m_floor = 0;
     }
@@ -140,6 +141,53 @@ namespace model
     revision.fetch_add(1, std::memory_order::relaxed);
   }
 
+  void Model::addMarker(Record marker)
+  {
+    markers++;
+    groups.push_back(Group{
+        .id = m_nextGroup++,
+        .source = marker.source,
+        .color = marker.color,
+        .firstTime = marker.time,
+        .lastTime = marker.time,
+        .startMillis = marker.millis,
+        .marker = true,
+    });
+    groups.back().rows.push_back(Row{.record = std::move(marker)});
+    m_rows++;
+    m_cycle.reset();
+    m_floor = 0;
+    // The logs after a marker start a new group even without a pause
+    m_lastTime.reset();
+    revision.fetch_add(1, std::memory_order::relaxed);
+  }
+
+  void ModStats::count(int64_t millis)
+  {
+    auto second = millis / 1000;
+    if (second > recentSecond)
+    {
+      // Seconds that went by without logs count as zero
+      for (int64_t s = std::max(recentSecond + 1, second - RATE_SECONDS + 1); s <= second; s++)
+        recent[s % RATE_SECONDS] = 0;
+      recentSecond = second;
+    }
+    if (second > recentSecond - RATE_SECONDS)
+      recent[second % RATE_SECONDS]++;
+  }
+
+  double ModStats::rate(int64_t nowMillis) const
+  {
+    auto now = nowMillis / 1000;
+    int total = 0;
+    for (int64_t s = now - RATE_SECONDS + 1; s <= now; s++)
+    {
+      if (s <= recentSecond && s > recentSecond - RATE_SECONDS)
+        total += recent[s % RATE_SECONDS];
+    }
+    return total / static_cast<double>(RATE_SECONDS);
+  }
+
   void Model::clear()
   {
     groups.clear();
@@ -147,6 +195,7 @@ namespace model
     m_modIndex.clear();
     std::fill(std::begin(severityCounts), std::end(severityCounts), 0);
     logs = 0;
+    markers = 0;
     m_rows = 0;
     m_cycle.reset();
     m_floor = 0;

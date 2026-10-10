@@ -36,16 +36,31 @@ namespace model
     int errors = 0;
     std::string firstTime;
     std::string lastTime;
+    int64_t startMillis = 0;
+    // A marker sits alone in its group, its only row is the marker
+    bool marker = false;
   };
+
+  // Seconds kept for the logs per second of a mod
+  inline constexpr int RATE_SECONDS = 10;
 
   struct ModStats
   {
     std::string name;
+    geode::Mod* mod = nullptr;
     int color = 245;
     int logs = 0;
     int warnings = 0;
     int errors = 0;
     bool hidden = false;
+
+    // Logs in each of the last seconds, by second since the epoch
+    int recent[RATE_SECONDS] = {};
+    int64_t recentSecond = 0;
+
+    void count(int64_t millis);
+    // Logs per second over the last RATE_SECONDS seconds
+    double rate(int64_t nowMillis) const;
   };
 
   struct Model
@@ -57,8 +72,10 @@ namespace model
     // Logs by severity, Trace first
     int severityCounts[5] = {};
     uint64_t logs = 0;
+    int markers = 0;
 
     void add(Record record, settings::Config const& config);
+    void addMarker(Record marker);
     void clear();
     ModStats* modStats(std::string const& name);
 

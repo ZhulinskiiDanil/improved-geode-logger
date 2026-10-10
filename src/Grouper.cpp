@@ -369,6 +369,7 @@ namespace grouper
         .nest = nestSpaces > 0 ? (nestSpaces + 1) / 2 : 0,
         .color = config->modColors && log.m_mod ? text::colorFor(log.m_mod->getID()) : PLAIN_MOD_COLOR,
         .time = timeOf(log, config->millis),
+        .millis = static_cast<int64_t>(log.m_time.timeSinceEpoch().millis()),
         .content = std::string(log.m_content),
     };
     if (config->collapse == settings::Collapse::Similar)
@@ -426,5 +427,33 @@ namespace grouper
     printLine(*config, std::move(entry), out);
     console::write(out.str());
     s_lastTime = now;
+  }
+
+  void printRule(std::string_view text, int color)
+  {
+    bool escapeCodes = console::hasEscapeCodes();
+
+    std::lock_guard lock(s_mutex);
+    int columns = console::columns();
+
+    Lines out(escapeCodes);
+    out.end();
+    out.color(color);
+    out.escape("[1m");
+    out.text("──── ");
+    out.text(text);
+    out.text(" ");
+    auto fill = std::min(columns - 1, MAX_HEADER_WIDTH) - out.width();
+    for (int i = 0; i < fill; i++)
+      out.text("─");
+    out.reset();
+    out.end();
+    console::write(out.str());
+
+    // What comes next starts its own group under a header
+    s_entries.clear();
+    s_cycle.reset();
+    s_block.reset();
+    s_lastTime = std::chrono::steady_clock::now();
   }
 }

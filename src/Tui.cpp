@@ -1,5 +1,6 @@
 #include "Tui.hpp"
 #include "Console.hpp"
+#include "DevLoop.hpp"
 #include "Look.hpp"
 #include "Model.hpp"
 #include "Settings.hpp"
@@ -171,6 +172,24 @@ namespace tui
     int sidebarWidth = 0;
     int top = 0;
     int sidebarTop = 0;
+    // Screen row of the list's first line
+    int listTop = 1;
+  };
+
+  enum class TimeMode
+  {
+    Clock,
+    // Since the log before it
+    SincePrevious,
+    // Since the first log of its group
+    SinceGroup,
+  };
+
+  // What the details panel says about a mod, gathered on the main thread where hooks live
+  struct ModCard
+  {
+    std::string name;
+    std::vector<std::string> lines;
   };
 
   struct State
@@ -191,6 +210,12 @@ namespace tui
 
     bool details = false;
     bool help = false;
+    // The details panel shows a mod's card or a text (the last crash) instead of the selected log
+    std::optional<std::string> detailMod;
+    std::optional<std::pair<std::string, std::string>> detailText;
+    int detailScroll = 0;
+
+    TimeMode timeMode = TimeMode::Clock;
 
     uint64_t logsAtPause = 0;
     std::string flash;
@@ -210,6 +235,11 @@ namespace tui
   static Layout s_layout;
   static std::vector<LineRef> s_view;
   static std::vector<std::string> s_sidebarMods;
+
+  // Set from other threads when the screen should be drawn again
+  static std::atomic<bool> s_wake = false;
+  static std::mutex s_cardMutex;
+  static std::optional<ModCard> s_card;
 
   static void flash(std::string text)
   {
@@ -244,6 +274,10 @@ namespace tui
 
       auto start = lines.size();
       lines.push_back({{group.id, -1}, &group, nullptr});
+
+      // Markers stay whatever the filters are, they are what you look for
+      if (group.marker)
+        continue;
 
       bool any = false;
       for (size_t i = 0; i < group.rows.size(); i++)
@@ -421,6 +455,13 @@ namespace tui
 
   static void copySelection()
   {
+    if (s.details && s.detailText)
+    {
+      copyToClipboard(s.detailText->second);
+      flash("Copied the whole text");
+      return;
+    }
+
     auto& model = model::get();
     std::string text;
     int lines = 0;
@@ -493,6 +534,184 @@ namespace tui
     flash("Cleared, the log file still has everything");
   }
 
+  // ! --- Developing --- !
+
+  // The next line down (or up) that is a warning, an error or a marker, or the next group
+  static void jump(int direction, bool groups)
+  {
+    auto& model = model::get();
+    std::lock_guard lock(model.mutex);
+    auto lines = flatten(model);
+    int count = static_cast<int>(lines.size());
+    if (count == 0)
+      return;
+
+    int from = s.follow ? count : indexOf(lines, s.selected);
+    if (from < 0)
+      from = std::clamp(s.selectedIndex, 0, count - 1);
+
+    for (int i = from + direction; i >= 0 && i < count; i += direction)
+    {
+      auto const& line = lines[i];
+      bool hit = groups ? line.row == nullptr
+                        : line.group->marker || (line.row && line.row->record.severity >= Severity::Warning);
+      if (!hit)
+        continue;
+
+      if (s.follow)
+      {
+        s.follow = false;
+        s.logsAtPause = model.logs;
+      }
+      s.selected = line.ref;
+      s.selectedIndex = i;
+      return;
+    }
+    flash(direction > 0 ? "Nothing more below" : "Nothing more above");
+  }
+
+  static std::string_view timeModeName(TimeMode mode)
+  {
+    switch (mode)
+    {
+    case TimeMode::SincePrevious:
+      return "since the log before";
+    case TimeMode::SinceGroup:
+      return "since the group's start";
+    default:
+      return "clock";
+    }
+  }
+
+  static void nextTimeMode()
+  {
+    s.timeMode = s.timeMode == TimeMode::Clock           ? TimeMode::SincePrevious
+                 : s.timeMode == TimeMode::SincePrevious ? TimeMode::SinceGroup
+                                                         : TimeMode::Clock;
+    flash(fmt::format("Time: {}", timeModeName(s.timeMode)));
+  }
+
+  static std::optional<std::string> sidebarModName()
+  {
+    if (s.sidebarIndex < 0 || s.sidebarIndex >= static_cast<int>(s_sidebarMods.size()))
+      return std::nullopt;
+    return s_sidebarMods[s.sidebarIndex];
+  }
+
+  static Mod* modNamed(std::string const& name)
+  {
+    auto& model = model::get();
+    std::lock_guard lock(model.mutex);
+    auto stats = model.modStats(name);
+    return stats ? stats->mod : nullptr;
+  }
+
+  // Version and hooks come from the main thread, the card fills in once it answers
+  static void requestCard(std::string const& name)
+  {
+    auto mod = modNamed(name);
+    {
+      std::lock_guard lock(s_cardMutex);
+      s_card = ModCard{name, {"  Loading…"}};
+    }
+
+    Loader::get()->queueInMainThread([name, mod]
+                                     {
+      std::vector<std::string> lines;
+      if (!mod)
+        lines.push_back("  Not a mod: these lines come from the game's own output");
+      else
+      {
+        std::string developers;
+        for (auto const& developer : mod->getDevelopers())
+          developers += (developers.empty() ? "" : ", ") + developer;
+
+        lines.push_back(fmt::format("  {} {} by {}", mod->getID(), mod->getVersion().toVString(), developers));
+        lines.push_back(fmt::format("  Logs {} from {} up · in the mods list: + more, - fewer, l on/off",
+                                    mod->isLoggingEnabled() ? "on" : "off", levelName(mod->getLogLevel())));
+
+        auto hooks = mod->getHooks();
+        lines.push_back(fmt::format("  {} hooks, {} patches", hooks.size(), mod->getPatches().size()));
+        for (auto hook : hooks)
+          lines.push_back(fmt::format("    {} {}", hook->isEnabled() ? "●" : "○", hook->getDisplayName()));
+      }
+
+      {
+        std::lock_guard lock(s_cardMutex);
+        if (s_card && s_card->name == name)
+          s_card->lines = std::move(lines);
+      }
+      s_wake = true; });
+  }
+
+  static void openCard()
+  {
+    auto name = sidebarModName();
+    if (!name)
+      return;
+    s.detailMod = *name;
+    s.detailText.reset();
+    s.details = true;
+    s.detailScroll = 0;
+    requestCard(*name);
+  }
+
+  static void changeModLevel(int delta)
+  {
+    auto name = sidebarModName();
+    auto mod = name ? modNamed(*name) : nullptr;
+    if (!mod)
+    {
+      flash("Not a mod, its level can't change");
+      return;
+    }
+
+    int level = std::clamp(static_cast<int>(mod->getLogLevel()) + delta, static_cast<int>(Severity::Trace), static_cast<int>(Severity::Error));
+    mod->setLogLevel(Severity::cast(level));
+    flash(fmt::format("{} logs from {} up", *name, levelName(level)));
+    if (s.detailMod == name)
+      requestCard(*name);
+  }
+
+  static void toggleModLogging()
+  {
+    auto name = sidebarModName();
+    auto mod = name ? modNamed(*name) : nullptr;
+    if (!mod)
+    {
+      flash("Not a mod, its logs can't be turned off");
+      return;
+    }
+
+    mod->setLoggingEnabled(!mod->isLoggingEnabled());
+    flash(fmt::format("{} logs {}", *name, mod->isLoggingEnabled() ? "on" : "off, in the log file too"));
+    if (s.detailMod == name)
+      requestCard(*name);
+  }
+
+  static void openCrash()
+  {
+    auto crash = devloop::lastCrash();
+    if (!crash)
+    {
+      flash("The last session didn't crash");
+      return;
+    }
+    s.detailText = std::pair(fmt::format(" Crash at {} · {} ", crash->time, crash->path), devloop::readCrash());
+    s.detailMod.reset();
+    s.details = true;
+    s.detailScroll = 0;
+    devloop::dismissCrash();
+  }
+
+  static void closeDetails()
+  {
+    s.details = false;
+    s.detailMod.reset();
+    s.detailText.reset();
+    s.detailScroll = 0;
+  }
+
   // ! --- Keys --- !
 
   static void onTyping(KEY_EVENT_RECORD const& key)
@@ -528,27 +747,53 @@ namespace tui
   static void onSidebarKey(KEY_EVENT_RECORD const& key, wchar_t c)
   {
     int count = static_cast<int>(s_sidebarMods.size());
+    int before = s.sidebarIndex;
+    // An open card follows the selected mod
+    auto moved = [&]
+    {
+      if (s.detailMod && s.sidebarIndex != before)
+        openCard();
+    };
+
     switch (key.wVirtualKeyCode)
     {
     case VK_UP:
       s.sidebarIndex = std::max(0, s.sidebarIndex - 1);
+      moved();
       return;
     case VK_DOWN:
       s.sidebarIndex = std::min(count - 1, s.sidebarIndex + 1);
+      moved();
       return;
     case VK_PRIOR:
       s.sidebarIndex = std::max(0, s.sidebarIndex - s_layout.listRows);
+      moved();
       return;
     case VK_NEXT:
       s.sidebarIndex = std::min(count - 1, s.sidebarIndex + s_layout.listRows);
+      moved();
       return;
     case VK_SPACE:
-    case VK_RETURN:
       toggleMod(s.sidebarIndex);
       return;
-    case VK_TAB:
+    case VK_RETURN:
+      if (s.detailMod)
+        closeDetails();
+      else
+        openCard();
+      return;
     case VK_ESCAPE:
+      if (s.detailMod)
+      {
+        closeDetails();
+        return;
+      }
+      s.sidebarFocus = false;
+      return;
+    case VK_TAB:
     case VK_RIGHT:
+      if (s.detailMod)
+        closeDetails();
       s.sidebarFocus = false;
       return;
     default:
@@ -559,10 +804,22 @@ namespace tui
       soloMod(s.sidebarIndex);
     else if (c == L'a')
       showAllMods();
+    else if (c == L'+' || c == L'=')
+      changeModLevel(-1);
+    else if (c == L'-')
+      changeModLevel(1);
+    else if (c == L'l')
+      toggleModLogging();
     else if (c == L'k')
+    {
       s.sidebarIndex = std::max(0, s.sidebarIndex - 1);
+      moved();
+    }
     else if (c == L'j')
+    {
       s.sidebarIndex = std::min(count - 1, s.sidebarIndex + 1);
+      moved();
+    }
     else if (c == L'm')
     {
       s.sidebar = false;
@@ -601,6 +858,32 @@ namespace tui
     {
       onSidebarKey(key, c);
       return;
+    }
+
+    // A text in the details panel (the crash log) scrolls with the arrows
+    if (s.details && s.detailText)
+    {
+      int page = std::max(1, s_layout.height / 2 - 2);
+      switch (key.wVirtualKeyCode)
+      {
+      case VK_UP:
+        s.detailScroll = std::max(0, s.detailScroll - 1);
+        return;
+      case VK_DOWN:
+        s.detailScroll++;
+        return;
+      case VK_PRIOR:
+        s.detailScroll = std::max(0, s.detailScroll - page);
+        return;
+      case VK_NEXT:
+        s.detailScroll += page;
+        return;
+      case VK_HOME:
+        s.detailScroll = 0;
+        return;
+      default:
+        break;
+      }
     }
 
     for (WORD repeat = 0; repeat < std::max<WORD>(key.wRepeatCount, 1); repeat++)
@@ -642,8 +925,10 @@ namespace tui
     case VK_RETURN:
       if (s.selected && s.selected->row < 0)
         setCollapsed(*s.selected, std::nullopt);
+      else if (s.details)
+        closeDetails();
       else
-        s.details = !s.details;
+        s.details = true;
       return;
     case VK_SPACE:
       if (s.selected)
@@ -668,7 +953,7 @@ namespace tui
       return;
     case VK_ESCAPE:
       if (s.details)
-        s.details = false;
+        closeDetails();
       else if (!s.search.empty())
         s.search.clear();
       else if (s.minLevel > Severity::Trace)
@@ -724,7 +1009,36 @@ namespace tui
         follow();
       break;
     case L'd':
-      s.details = !s.details;
+      if (s.details)
+        closeDetails();
+      else
+        s.details = true;
+      break;
+    case L'n':
+      jump(1, false);
+      break;
+    case L'N':
+      jump(-1, false);
+      break;
+    case L']':
+      jump(1, true);
+      break;
+    case L'[':
+      jump(-1, true);
+      break;
+    case L't':
+      nextTimeMode();
+      break;
+    case L'b':
+      devloop::addMarker();
+      flash("Marker added");
+      break;
+    case L'R':
+      flash("Restarting the game…");
+      devloop::restart();
+      break;
+    case L'o':
+      openCrash();
       break;
     case L'y':
       copySelection();
@@ -751,7 +1065,7 @@ namespace tui
       return;
     }
 
-    int listRow = y - 1;
+    int listRow = y - s_layout.listTop;
     if (listRow < 0 || listRow >= s_layout.listRows)
       return;
 
@@ -832,6 +1146,8 @@ namespace tui
                                                         { return mod.hidden; }));
     if (hidden)
       row.put(fmt::format("   │  {} hidden", hidden), {KEY_FG, BAR_BG});
+    if (s.timeMode != TimeMode::Clock)
+      row.put(fmt::format("   │  time {}", timeModeName(s.timeMode)), {KEY_FG, BAR_BG});
 
     if (s.follow)
       row.right("● LIVE ", {LIVE, BAR_BG, true});
@@ -859,6 +1175,59 @@ namespace tui
     auto time = group.firstTime == group.lastTime ? group.firstTime : fmt::format("{} – {}", group.firstTime, group.lastTime);
     if (row.left() > text::width(time) + 2)
       row.right(time + " ", {DIM, bg});
+  }
+
+  static void drawMarker(Cells& row, model::Group const& group, bool selected)
+  {
+    int bg = selected ? SELECT_BG : -1;
+    auto const& marker = group.rows.front().record;
+    row.put(" ━━ ", {group.color, bg, true});
+    row.put(fmt::format("{} · {} ", marker.content, marker.time), {group.color, bg, true});
+    std::string rule;
+    for (int i = 0; i < row.left(); i++)
+      rule += "━";
+    row.put(rule, {group.color, bg});
+  }
+
+  // "+12ms", "+1.25s", "+2m05s"
+  static std::string span(int64_t millis)
+  {
+    millis = std::max<int64_t>(millis, 0);
+    if (millis < 1000)
+      return fmt::format("+{}ms", millis);
+    if (millis < 60000)
+      return fmt::format("+{:.2f}s", millis / 1000.0);
+    return fmt::format("+{}m{:02}s", millis / 60000, millis / 1000 % 60);
+  }
+
+  static int64_t millisOf(Line const& line)
+  {
+    if (line.row)
+      return line.row->record.millis;
+    if (line.group->marker)
+      return line.group->rows.front().record.millis;
+    return -1;
+  }
+
+  // The time column for the line at this index, as the time mode says
+  static std::string timeFor(std::vector<Line> const& lines, int index)
+  {
+    auto const& record = lines[index].row->record;
+    switch (s.timeMode)
+    {
+    case TimeMode::SincePrevious:
+      for (int i = index - 1; i >= 0; i--)
+      {
+        auto millis = millisOf(lines[i]);
+        if (millis >= 0)
+          return span(record.millis - millis);
+      }
+      return "";
+    case TimeMode::SinceGroup:
+      return span(record.millis - lines[index].group->startMillis);
+    default:
+      return record.time;
+    }
   }
 
   // The message with every match of the search marked
@@ -893,7 +1262,7 @@ namespace tui
     }
   }
 
-  static void drawRow(Cells& row, settings::Config const& config, model::Group const& group, model::Row const& logRow, bool selected)
+  static void drawRow(Cells& row, settings::Config const& config, model::Group const& group, model::Row const& logRow, std::string_view time, bool selected)
   {
     auto const& record = logRow.record;
     int bg = selected ? SELECT_BG : -1;
@@ -901,7 +1270,9 @@ namespace tui
 
     row.put("   ", {-1, bg});
     row.put("│ ", {group.color, bg});
-    row.put(record.time, {DIM, bg});
+    // The column keeps the clock's width in every time mode
+    int timeWidth = static_cast<int>(record.time.size());
+    row.put(fmt::format("{:>{}}", time, timeWidth), {s.timeMode == TimeMode::Clock ? DIM : KEY_FG, bg});
     row.put(" ", {-1, bg});
     row.put(look::severityName(record.severity), {prefixColor, bg, record.severity >= Severity::Warning});
     row.put(" ", {-1, bg});
@@ -934,7 +1305,7 @@ namespace tui
     if (listRow == 0)
     {
       row.put(" MODS", {s.sidebarFocus ? KEY_FG : BAR_FG, -1, true});
-      row.put(s.sidebarFocus ? "  Space hide · s solo" : "  Tab", {DIM});
+      row.put(s.sidebarFocus ? "  Enter card · ? keys" : "  Tab", {DIM});
       return;
     }
 
@@ -950,9 +1321,23 @@ namespace tui
     int bg = selected ? SELECT_BG : -1;
     row.put(stats->hidden ? " ○ " : " ● ", {stats->hidden ? DIM : stats->color, bg});
 
+    // The mod's own log level, changed with + and -
+    std::string level;
+    int levelColor = DIM;
+    if (stats->mod && !stats->mod->isLoggingEnabled())
+    {
+      level = "off ";
+      levelColor = ERROR_COLOR;
+    }
+    else if (stats->mod)
+      level = std::string(levelName(stats->mod->getLogLevel()).substr(0, 1)) + " ";
+
     auto count = compact(stats->logs);
     int nameColor = stats->hidden ? DIM : stats->errors ? ERROR_COLOR : stats->warnings ? WARNING_COLOR : 252;
-    row.put(stats->name, {nameColor, bg}, text::width(count) + 2);
+    int tail = text::width(count) + text::width(level) + 1;
+    row.put(stats->name, {nameColor, bg}, tail + 1);
+    row.pad(row.used() + row.left() - tail, {-1, bg});
+    row.put(level, {levelColor, bg});
     row.right(count + " ", {DIM, bg});
   }
 
@@ -965,11 +1350,14 @@ namespace tui
         {"/", "search"},
         {"1-5", "level"},
         {"Tab", "mods"},
-        {"c e", "fold all"},
+        {"b", "mark"},
+        {"n", "next issue"},
+        {"t", "time"},
         {"f", "pause"},
         {"y", "copy"},
-        {"x", "clear"},
         {"?", "help"},
+        {"c e", "fold all"},
+        {"x", "clear"},
     };
     return keys;
   }
@@ -1022,6 +1410,22 @@ namespace tui
         "  x                clear the screen (the log file keeps everything)",
         "  Esc              close the panel, clear the search, the level, back to live",
         "",
+        "  DEVELOPING",
+        "",
+        "  b                a marker line, also from the game with the keybind in the settings",
+        "  n / N            the next / previous warning, error or marker",
+        "  ] / [            the next / previous group",
+        "  t                time: clock, since the log before, since the group's start",
+        "  Shift+R          restart the game, the banner says when a .geode was rebuilt",
+        "  o                open the crash log of the last session",
+        "",
+        "  MODS LIST",
+        "",
+        "  Space            hide or show the mod's logs here",
+        "  s / a            only this mod / every mod",
+        "  Enter            the mod's card: version, hooks, logs per second",
+        "  + / -  l         more or fewer of its logs, turn its logging off (log file too)",
+        "",
         "  MOUSE",
         "",
         "  wheel            scroll",
@@ -1034,8 +1438,33 @@ namespace tui
     };
   }
 
-  static std::vector<std::string> detailLines(std::optional<Line> const& line, int width, std::string& title)
+  static std::vector<std::string> detailLines(model::Model& model, std::optional<Line> const& line, int width, std::string& title)
   {
+    if (s.detailText)
+    {
+      title = s.detailText->first;
+      std::vector<std::string> lines;
+      for (auto& part : text::wrap(text::clean(s.detailText->second), width - 4))
+        lines.push_back("  " + part);
+      return lines;
+    }
+
+    if (s.detailMod)
+    {
+      title = fmt::format(" {} ", *s.detailMod);
+      std::vector<std::string> lines;
+      if (auto stats = model.modStats(*s.detailMod))
+      {
+        auto now = static_cast<int64_t>(asp::SystemTime::now().timeSinceEpoch().millis());
+        lines.push_back(fmt::format("  {} logs · {} warnings · {} errors · {:.1f} logs/s over the last {} s", stats->logs,
+                                    stats->warnings, stats->errors, stats->rate(now), model::RATE_SECONDS));
+      }
+      std::lock_guard lock(s_cardMutex);
+      if (s_card && s_card->name == *s.detailMod)
+        lines.insert(lines.end(), s_card->lines.begin(), s_card->lines.end());
+      return lines;
+    }
+
     if (!line)
     {
       title = " Details ";
@@ -1082,15 +1511,34 @@ namespace tui
     for (auto const& line : lines)
       s_view.push_back(line.ref);
 
+    // Banners under the title: rebuilt mods, the last crash
+    std::vector<std::pair<std::string, int>> banners;
+    auto updated = devloop::updatedMods();
+    if (!updated.empty())
+    {
+      std::string ids;
+      for (auto const& id : updated)
+        ids += (ids.empty() ? "" : ", ") + id;
+      banners.emplace_back(fmt::format(" ⟳ {} rebuilt · Shift+R restarts the game to load it", ids), 221);
+    }
+    if (auto crash = devloop::lastCrash())
+      banners.emplace_back(fmt::format(" ✖ The last session crashed at {} · o opens the crash log", crash->time), ERROR_COLOR);
+    int bannerRows = std::min(static_cast<int>(banners.size()), std::max(0, height - 4));
+
     // The details panel takes the lower part of the screen
-    int body = height - 2;
+    int body = height - 2 - bannerRows;
     std::string detailTitle;
     std::vector<std::string> details;
     int detailRows = 0;
     if (s.details && !s.help)
     {
-      details = detailLines(selectedLine(lines), width, detailTitle);
-      detailRows = std::clamp(static_cast<int>(details.size()) + 1, 3, std::max(3, body / 2));
+      details = detailLines(model, selectedLine(lines), width, detailTitle);
+      // Long texts get more room and scroll with the arrows
+      int room = s.detailText || s.detailMod ? body * 2 / 3 : body / 2;
+      detailRows = std::clamp(static_cast<int>(details.size()) + 1, 3, std::max(3, room));
+      int shown = detailRows - 1;
+      s.detailScroll = std::clamp(s.detailScroll, 0, std::max(0, static_cast<int>(details.size()) - shown));
+      details.erase(details.begin(), details.begin() + s.detailScroll);
     }
     int listRows = std::max(1, body - detailRows);
 
@@ -1151,11 +1599,19 @@ namespace tui
         .sidebarWidth = sidebarWidth,
         .top = top,
         .sidebarTop = sidebarTop,
+        .listTop = 1 + bannerRows,
     };
 
     Cells title(width, BAR_BG);
     drawTitle(title, model);
     screen.push_back(title.finish());
+
+    for (int i = 0; i < bannerRows; i++)
+    {
+      Cells banner(width, 236);
+      banner.put(banners[i].first, {banners[i].second, 236, true});
+      screen.push_back(banner.finish());
+    }
 
     auto help = s.help ? helpLines() : std::vector<std::string>();
     for (int i = 0; i < listRows; i++)
@@ -1175,14 +1631,20 @@ namespace tui
       if (s.help)
       {
         if (i < static_cast<int>(help.size()))
-          main.put(help[i], {i == 1 || i == 18 ? KEY_FG : 252, -1, i == 1 || i == 18});
+        {
+          // Titles are the lines in capitals
+          bool heading = help[i].size() > 2 && help[i].find_first_of("abcdefghijklmnopqrstuvwxyz") == std::string::npos;
+          main.put(help[i], {heading ? KEY_FG : 252, -1, heading});
+        }
       }
       else if (top + i < count)
       {
         auto const& line = lines[top + i];
         bool selected = top + i == selectedIndex;
-        if (line.row)
-          drawRow(main, *config, *line.group, *line.row, selected);
+        if (line.group->marker)
+          drawMarker(main, *line.group, selected);
+        else if (line.row)
+          drawRow(main, *config, *line.group, *line.row, timeFor(lines, top + i), selected);
         else
           drawHeader(main, *line.group, selected);
       }
@@ -1208,7 +1670,13 @@ namespace tui
         Cells row(width);
         bool last = i == detailRows - 2 && static_cast<int>(details.size()) > detailRows - 1;
         if (last)
-          row.put(fmt::format("  … {} more lines, y copies it all", details.size() - i), {DIM});
+        {
+          // The mod card scrolls nowhere, its keys move through the mods list
+          auto hint = s.detailText  ? "↑↓ scroll · y copies it all"
+                      : s.detailMod ? "Esc closes"
+                                    : "y copies it all";
+          row.put(fmt::format("  … {} more lines · {}", details.size() - i, hint), {DIM});
+        }
         else if (i < static_cast<int>(details.size()))
           row.put(details[i], {252});
         screen.push_back(row.finish());
@@ -1288,6 +1756,8 @@ namespace tui
   {
     uint64_t drawnRevision = 0;
     auto lastFrame = std::chrono::steady_clock::now();
+    auto lastPoll = lastFrame;
+    size_t updatedCount = 0;
     bool flashing = false;
 
     while (true)
@@ -1295,6 +1765,19 @@ namespace tui
       bool wanted = s_wanted.load(std::memory_order::relaxed);
       if (wanted != s_active)
         wanted ? enter() : leave();
+
+      // Rebuilt mods are looked for in both modes, the stream prints a line for them
+      if (std::chrono::steady_clock::now() - lastPoll >= std::chrono::seconds(1))
+      {
+        devloop::poll();
+        lastPoll = std::chrono::steady_clock::now();
+        auto updated = devloop::updatedMods().size();
+        if (updated != updatedCount)
+          s_dirty = true;
+        updatedCount = updated;
+      }
+      if (s_wake.exchange(false))
+        s_dirty = true;
 
       if (!s_active)
       {
