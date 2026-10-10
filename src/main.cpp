@@ -14,11 +14,12 @@ $on_mod(Loaded)
   if (!console::open())
     return;
 
-  settings::load();
-
+  // Listening first: once the settings turn grouping on, no log falls in between
   log::LogEvent().listen([](log::BorrowedLog const& log)
                          {
                            grouper::handle(log);
                            return false; })
       .leak();
+
+  settings::load();
 }

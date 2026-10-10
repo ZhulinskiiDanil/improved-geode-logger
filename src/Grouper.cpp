@@ -415,7 +415,7 @@ namespace grouper
   void handle(log::BorrowedLog const& log)
   {
     auto config = settings::get();
-    if (!config->enabled || !console::isOpen() || !isShown(*config, log))
+    if (!console::isGrouping() || !isShown(*config, log))
       return;
 
     auto nestSpaces = std::get<2>(log.truncateWithNest());

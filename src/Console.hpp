@@ -24,4 +24,5 @@ namespace console
 
   // While off, Geode writes to the console as usual
   void setGrouping(bool enabled);
+  bool isGrouping();
 }

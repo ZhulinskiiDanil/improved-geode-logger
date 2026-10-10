@@ -15,15 +15,18 @@ namespace console
 
   // ! --- Geode's writes --- !
 
+  using WriteFileType = BOOL(WINAPI*)(HANDLE, LPCVOID, DWORD, LPDWORD, LPOVERLAPPED);
+  static std::atomic<WriteFileType> s_writeFile = &WriteFile;
+
   // Geode prints to the console with WriteFile, the grouped lines go out with WriteConsoleW,
-  // so every WriteFile that lands on a console is one of Geode's lines
+  // so every WriteFile from Geode that lands on a console is one of Geode's lines
   static bool isConsole(HANDLE file)
   {
     DWORD mode;
     return GetFileType(file) == FILE_TYPE_CHAR && GetConsoleMode(file, &mode);
   }
 
-  static BOOL WINAPI WriteFileDetour(HANDLE file, LPCVOID buffer, DWORD size, LPDWORD written, LPOVERLAPPED overlapped)
+  static BOOL WINAPI geodeWriteFile(HANDLE file, LPCVOID buffer, DWORD size, LPDWORD written, LPOVERLAPPED overlapped)
   {
     if (s_grouping.load(std::memory_order::relaxed) && isConsole(file))
     {
@@ -31,7 +34,51 @@ namespace console
         *written = size;
       return TRUE;
     }
-    return WriteFile(file, buffer, size, written, overlapped);
+    return s_writeFile.load(std::memory_order::relaxed)(file, buffer, size, written, overlapped);
+  }
+
+  // Swaps WriteFile in Geode.dll's import table, so only Geode's own calls come here.
+  // Not a hook: the log thread calls WriteFile all the time, and a hook's code becomes
+  // briefly non-executable whenever another mod adds hooks, which crashes that thread
+  static bool takeGeodeWrites()
+  {
+    auto base = reinterpret_cast<uint8_t*>(GetModuleHandleW(L"Geode.dll"));
+    if (!base)
+      return false;
+
+    auto dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    auto nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    auto const& imports = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!imports.VirtualAddress)
+      return false;
+
+    bool taken = false;
+    for (auto library = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + imports.VirtualAddress); library->Name; library++)
+    {
+      if (!library->OriginalFirstThunk)
+        continue;
+
+      auto names = reinterpret_cast<IMAGE_THUNK_DATA*>(base + library->OriginalFirstThunk);
+      auto slots = reinterpret_cast<IMAGE_THUNK_DATA*>(base + library->FirstThunk);
+      for (; names->u1.AddressOfData; names++, slots++)
+      {
+        if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal))
+          continue;
+        auto name = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + names->u1.AddressOfData)->Name;
+        if (std::string_view(name) != "WriteFile")
+          continue;
+
+        auto slot = reinterpret_cast<void**>(&slots->u1.Function);
+        DWORD protection;
+        if (!VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &protection))
+          continue;
+        s_writeFile.store(reinterpret_cast<WriteFileType>(*slot));
+        InterlockedExchangePointer(slot, reinterpret_cast<void*>(&geodeWriteFile));
+        VirtualProtect(slot, sizeof(void*), protection, &protection);
+        taken = true;
+      }
+    }
+    return taken;
   }
 
   // ! --- Console --- !
@@ -51,16 +98,9 @@ namespace console
     s_escapeCodes = GetConsoleMode(s_handle, &mode) &&
                     SetConsoleMode(s_handle, mode | ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 
-    // KernelBase holds the real WriteFile, the one in kernel32 only jumps there
-    auto kernelBase = GetModuleHandleW(L"kernelbase.dll");
-    auto address = kernelBase ? GetProcAddress(kernelBase, "WriteFile") : nullptr;
-    if (!address)
-      address = reinterpret_cast<FARPROC>(&WriteFile);
-
-    auto hook = Mod::get()->hook(reinterpret_cast<void*>(address), &WriteFileDetour, "WriteFile");
-    if (!hook)
+    if (!takeGeodeWrites())
     {
-      log::error("Can't take over the console, Geode keeps printing it: {}", hook.unwrapErr());
+      log::error("Can't take over the console, Geode keeps printing it");
       CloseHandle(s_handle);
       s_handle = INVALID_HANDLE_VALUE;
       return false;
@@ -108,5 +148,10 @@ namespace console
   void setGrouping(bool enabled)
   {
     s_grouping.store(enabled && isOpen(), std::memory_order::relaxed);
+  }
+
+  bool isGrouping()
+  {
+    return s_grouping.load(std::memory_order::relaxed);
   }
 }

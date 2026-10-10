@@ -7,6 +7,8 @@
 	"name": "Improved Logger",
 	"version": "v1.0.0",
 	"developer": "Zhulis",
+	"early-load": true,
+	"load-priority": "first",
 	"description": "Groups the console logs by mod, folds repeated lines into one and shows log nesting as a tree",
 	"repository": "https://github.com/ZhulinskiiDanil/improved-geode-logger",
 	"tags": [
