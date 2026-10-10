@@ -2176,6 +2176,23 @@ namespace tui
     return lines;
   }
 
+  // The window's title, with the session's errors first: the taskbar shows it while the console is behind the game
+  static int s_titleErrors = -1;
+
+  static void updateTitle(int errors)
+  {
+    if (errors == s_titleErrors)
+      return;
+    s_titleErrors = errors;
+
+    std::string title = "Geometry Dash · Improved Logger";
+    if (errors > 0)
+      title = fmt::format("✖ {} error{} · {}", errors, errors == 1 ? "" : "s", title);
+    std::wstring wide(MultiByteToWideChar(CP_UTF8, 0, title.data(), static_cast<int>(title.size()), nullptr, 0), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, title.data(), static_cast<int>(title.size()), wide.data(), static_cast<int>(wide.size()));
+    SetConsoleTitleW(wide.c_str());
+  }
+
   static void render()
   {
     auto config = settings::get();
@@ -2416,7 +2433,14 @@ namespace tui
     Cells bottom(width - 1, BAR_BG);
     drawBottom(bottom);
     screen.push_back(bottom.finish());
+    // An older log file has its own errors, the title keeps counting the live ones
+    std::optional<int> liveErrors;
+    if (&model == &model::get())
+      liveErrors = model.severityCounts[Severity::Error - Severity::Trace];
     lock.unlock();
+
+    if (liveErrors)
+      updateTitle(*liveErrors);
 
     std::string frame = "\x1b[?25l";
     for (size_t i = 0; i < screen.size(); i++)
@@ -2443,7 +2467,7 @@ namespace tui
     wchar_t title[512] = {};
     GetConsoleTitleW(title, 512);
     s_oldTitle = title;
-    SetConsoleTitleW(L"Geometry Dash · Improved Logger");
+    updateTitle(0);
 
     console::write("\x1b[?1049h\x1b[?25l\x1b[2J");
     s_active = true;
@@ -2457,6 +2481,7 @@ namespace tui
       SetConsoleMode(s_input, s_inputMode);
     if (!s_oldTitle.empty())
       SetConsoleTitleW(s_oldTitle.c_str());
+    s_titleErrors = -1;
     s_active = false;
   }
 

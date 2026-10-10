@@ -1,3 +1,7 @@
+# v1.5.1
+
+- The console window's title counts the errors of the session, so the taskbar shows them while the console is behind the game
+
 # v1.5.0
 
 - On the first launch without Geode's console, a popup offers to turn it on and restart
