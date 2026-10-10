@@ -2,6 +2,8 @@
 
 A Geode mod that turns Geometry Dash's platform console into an interactive screen for the logs: groups by mod, folds repeated lines, search, level and mod filters, markers, a restart key for the loop of building a mod, and an API to pin values instead of logging them every frame. Windows only.
 
+![The interactive console](docs/console.png)
+
 Turn on **Show Platform Console** in Geode's settings to see the console (on the first launch without it, the mod offers to), and press `?` in it for every key. Log files stay exactly as Geode writes them.
 
 ## Install

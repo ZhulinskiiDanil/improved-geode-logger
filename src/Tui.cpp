@@ -259,6 +259,7 @@ namespace tui
   static HANDLE s_input = INVALID_HANDLE_VALUE;
   static DWORD s_inputMode = 0;
   static DWORD s_buttons = 0;
+  static std::wstring s_oldTitle;
   static State s;
   static Layout s_layout;
   static std::vector<LineRef> s_view;
@@ -1118,7 +1119,8 @@ namespace tui
     }
   }
 
-  static void onSidebarKey(KEY_EVENT_RECORD const& key, wchar_t c)
+  // True when the mods list took the key, the others still work as everywhere (R, b, ?...)
+  static bool onSidebarKey(KEY_EVENT_RECORD const& key, wchar_t c)
   {
     int count = static_cast<int>(s_sidebarMods.size());
     int before = s.sidebarIndex;
@@ -1134,42 +1136,42 @@ namespace tui
     case VK_UP:
       s.sidebarIndex = std::max(0, s.sidebarIndex - 1);
       moved();
-      return;
+      return true;
     case VK_DOWN:
       s.sidebarIndex = std::min(count - 1, s.sidebarIndex + 1);
       moved();
-      return;
+      return true;
     case VK_PRIOR:
       s.sidebarIndex = std::max(0, s.sidebarIndex - s_layout.listRows);
       moved();
-      return;
+      return true;
     case VK_NEXT:
       s.sidebarIndex = std::min(count - 1, s.sidebarIndex + s_layout.listRows);
       moved();
-      return;
+      return true;
     case VK_SPACE:
       toggleMod(s.sidebarIndex);
-      return;
+      return true;
     case VK_RETURN:
       if (s.detailMod)
         closeDetails();
       else
         openCard();
-      return;
+      return true;
     case VK_ESCAPE:
       if (s.detailMod)
       {
         closeDetails();
-        return;
+        return true;
       }
       s.sidebarFocus = false;
-      return;
+      return true;
     case VK_TAB:
     case VK_RIGHT:
       if (s.detailMod)
         closeDetails();
       s.sidebarFocus = false;
-      return;
+      return true;
     default:
       break;
     }
@@ -1201,6 +1203,9 @@ namespace tui
       s.sidebar = false;
       s.sidebarFocus = false;
     }
+    else
+      return false;
+    return true;
   }
 
   static void onKey(KEY_EVENT_RECORD const& key)
@@ -1236,11 +1241,8 @@ namespace tui
       return;
     }
 
-    if (s.sidebarFocus)
-    {
-      onSidebarKey(key, c);
+    if (s.sidebarFocus && onSidebarKey(key, c))
       return;
-    }
 
     // A text in the details panel (the crash log) scrolls with the arrows
     if (s.details && s.detailText)
@@ -2307,6 +2309,12 @@ namespace tui
       FlushConsoleInputBuffer(s_input);
     }
 
+    // The window's title says what it is instead of the game's path
+    wchar_t title[512] = {};
+    GetConsoleTitleW(title, 512);
+    s_oldTitle = title;
+    SetConsoleTitleW(L"Geometry Dash · Improved Logger");
+
     console::write("\x1b[?1049h\x1b[?25l\x1b[2J");
     s_active = true;
     s_dirty = true;
@@ -2317,6 +2325,8 @@ namespace tui
     console::write("\x1b[0m\x1b[2J\x1b[?25h\x1b[?1049l");
     if (s_input != INVALID_HANDLE_VALUE)
       SetConsoleMode(s_input, s_inputMode);
+    if (!s_oldTitle.empty())
+      SetConsoleTitleW(s_oldTitle.c_str());
     s_active = false;
   }
 

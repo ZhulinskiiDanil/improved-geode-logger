@@ -8,6 +8,8 @@
 - A banner when Geode couldn't load some mods, `P` (or a click) shows why
 - Floods of logs no longer lose lines: 200 000 logs in a burst all get through (89 000 before). The console check of every Geode write is remembered, the screen lets go of the logs while the console takes a frame, and the clock is formatted once a second
 - `Shift+R` restarts a minimized game too: it stopped its loop and never got to the restart
+- Keys like `R`, `b` and `?` work in the mods list too
+- The console window's title says Improved Logger instead of the game's path
 - Tests for the folding of repeats, the search and the reading of log files, run in CI
 
 # v1.4.0
