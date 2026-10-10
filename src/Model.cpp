@@ -1,9 +1,8 @@
 #include "Model.hpp"
 
-#include <Geode/loader/Types.hpp>
-#include <algorithm>
+#include "Levels.hpp"
 
-using namespace geode;
+#include <algorithm>
 
 namespace model
 {
@@ -97,7 +96,7 @@ namespace model
     m_lastMillis = record.millis;
 
     int severity = record.severity;
-    severityCounts[std::clamp(severity - Severity::Trace, 0, 4)]++;
+    severityCounts[std::clamp(severity - level::Trace, 0, 4)]++;
     logs++;
 
     auto [it, added] = m_modIndex.try_emplace(record.source.name, mods.size());
@@ -106,8 +105,8 @@ namespace model
     auto& stats = mods[it->second];
     stats.logs++;
     stats.count(record.millis);
-    stats.warnings += severity == Severity::Warning;
-    stats.errors += severity >= Severity::Error;
+    stats.warnings += severity == level::Warning;
+    stats.errors += severity >= level::Error;
 
     bool sameGroup = !groups.empty() && !groups.back().marker && sameBlock(groups.back().source, record.source, config.threadGroups) && !pause;
     if (!sameGroup)
@@ -119,8 +118,8 @@ namespace model
 
     auto& group = groups.back();
     group.logs++;
-    group.warnings += severity == Severity::Warning;
-    group.errors += severity >= Severity::Error;
+    group.warnings += severity == level::Warning;
+    group.errors += severity >= level::Error;
     group.lastTime = record.time;
 
     bool folded = config.collapse != settings::Collapse::Off && fold(config, group, record);

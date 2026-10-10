@@ -1,6 +1,7 @@
 #include "Grouper.hpp"
 #include "Console.hpp"
 #include "DevLoop.hpp"
+#include "Levels.hpp"
 #include "Look.hpp"
 #include "Model.hpp"
 #include "Settings.hpp"
@@ -13,6 +14,10 @@
 #include <mutex>
 
 using namespace geode::prelude;
+
+// The parts without Geode count on these
+static_assert(level::Trace == Severity::Trace && level::Debug == Severity::Debug && level::Info == Severity::Info &&
+              level::Warning == Severity::Warning && level::Error == Severity::Error);
 
 namespace grouper
 {
@@ -373,7 +378,7 @@ namespace grouper
     auto nestSpaces = std::get<2>(log.truncateWithNest());
 
     Record record{
-        .source = {log.m_mod, std::string(log.m_source), std::string(log.m_thread)},
+        .source = {log.m_mod, std::string(log.m_source), std::string(log.m_thread), log.m_mod ? std::string(log.m_mod->getID()) : std::string()},
         .severity = log.m_severity,
         .nest = nestSpaces > 0 ? (nestSpaces + 1) / 2 : 0,
         .color = config->modColors && log.m_mod ? text::colorFor(log.m_mod->getID()) : PLAIN_MOD_COLOR,

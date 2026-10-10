@@ -4,6 +4,7 @@
 #include "History.hpp"
 #include "Look.hpp"
 #include "Model.hpp"
+#include "Search.hpp"
 #include "Settings.hpp"
 #include "Text.hpp"
 
@@ -279,127 +280,7 @@ namespace tui
 
   // ! --- Search --- !
 
-  // Words must all be found, in the message or the mod's name: -word must not be there,
-  // "a phrase" keeps its spaces, mod:, thread: and level: look at one thing, re: is a regex
-  struct Term
-  {
-    enum class Field
-    {
-      Text,
-      Mod,
-      Thread,
-      Level,
-      Regex,
-    };
-
-    Field field = Field::Text;
-    bool negate = false;
-    std::string value;
-    int level = 0;
-    std::optional<std::regex> regex;
-  };
-
-  struct Query
-  {
-    std::vector<Term> terms;
-    // The words to mark in the messages
-    std::vector<std::string> marks;
-    bool badRegex = false;
-  };
-
-  static std::vector<std::string> splitQuery(std::string_view text)
-  {
-    std::vector<std::string> words;
-    std::string word;
-    bool quoted = false;
-    for (char c : text)
-    {
-      if (c == '"')
-        quoted = !quoted;
-      else if (c == ' ' && !quoted)
-      {
-        if (!word.empty())
-          words.push_back(std::move(word));
-        word.clear();
-      }
-      else
-        word.push_back(c);
-    }
-    if (!word.empty())
-      words.push_back(std::move(word));
-    return words;
-  }
-
-  static std::optional<int> levelNamed(std::string_view name)
-  {
-    auto lower = string::toLower(std::string(name));
-    if (lower == "trace")
-      return Severity::Trace;
-    if (lower == "debug")
-      return Severity::Debug;
-    if (lower == "info")
-      return Severity::Info;
-    if (lower == "warn" || lower == "warning")
-      return Severity::Warning;
-    if (lower == "error")
-      return Severity::Error;
-    return std::nullopt;
-  }
-
-  static Query parseQuery(std::string_view text)
-  {
-    Query query;
-    for (auto& word : splitQuery(text))
-    {
-      Term term;
-      std::string_view view = word;
-      if (view.size() > 1 && view[0] == '-')
-      {
-        term.negate = true;
-        view.remove_prefix(1);
-      }
-
-      auto field = [&](std::string_view prefix)
-      {
-        if (view.size() <= prefix.size() || !text::containsCaseless(view.substr(0, prefix.size()), prefix))
-          return false;
-        view.remove_prefix(prefix.size());
-        return true;
-      };
-
-      if (field("mod:"))
-        term.field = Term::Field::Mod;
-      else if (field("thread:"))
-        term.field = Term::Field::Thread;
-      else if (field("level:"))
-      {
-        auto level = levelNamed(view);
-        if (!level)
-          continue;
-        term.field = Term::Field::Level;
-        term.level = *level;
-      }
-      else if (field("re:"))
-      {
-        term.field = Term::Field::Regex;
-        try
-        {
-          term.regex.emplace(std::string(view), std::regex::ECMAScript | std::regex::icase);
-        }
-        catch (std::regex_error const&)
-        {
-          query.badRegex = true;
-          continue;
-        }
-      }
-
-      term.value = std::string(view);
-      if (term.field == Term::Field::Text && !term.negate)
-        query.marks.push_back(term.value);
-      query.terms.push_back(std::move(term));
-    }
-    return query;
-  }
+  using search::Query;
 
   static Query const& query()
   {
@@ -407,40 +288,15 @@ namespace tui
     static std::string cachedText;
     if (cachedText != s.search)
     {
-      cached = parseQuery(s.search);
+      cached = search::parse(s.search);
       cachedText = s.search;
     }
     return cached;
   }
 
-  static bool matches(Term const& term, Record const& record)
-  {
-    switch (term.field)
-    {
-    case Term::Field::Mod:
-      return text::containsCaseless(record.source.name, term.value) ||
-             (record.source.mod && text::containsCaseless(std::string_view(record.source.mod->getID()), term.value));
-    case Term::Field::Thread:
-      return text::containsCaseless(record.source.thread, term.value);
-    case Term::Field::Level:
-      return record.severity >= term.level;
-    case Term::Field::Regex:
-      return std::regex_search(record.content, *term.regex);
-    default:
-      return text::containsCaseless(record.content, term.value) || text::containsCaseless(record.source.name, term.value);
-    }
-  }
-
   static bool passes(Record const& record)
   {
-    if (record.severity < s.minLevel)
-      return false;
-    for (auto const& term : query().terms)
-    {
-      if (matches(term, record) == term.negate)
-        return false;
-    }
-    return true;
+    return record.severity >= s.minLevel && search::matches(query(), record);
   }
 
   static bool filtering()

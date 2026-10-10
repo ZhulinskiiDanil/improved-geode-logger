@@ -21,6 +21,7 @@ struct Source
   geode::Mod* mod = nullptr;
   std::string name;
   std::string thread;
+  std::string modID;
 
   bool operator==(Source const&) const = default;
 };
