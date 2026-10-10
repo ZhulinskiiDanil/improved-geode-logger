@@ -17,6 +17,7 @@
 - `H` saves the logs as a page to open in a browser or send: groups fold, levels in color, a filter box
 - The banner for a changed `.geode` names the mod and says updated: a manager installing an update shows it too
 - The keys at the bottom follow the focus: the mods list, a text, the picker, the help, an older log
+- A group of one log is one line, the mod's name then the log: mods taking turns took two rows a log
 - Tests for the folding of repeats, the search and the reading of log files, run in CI
 
 # v1.4.0

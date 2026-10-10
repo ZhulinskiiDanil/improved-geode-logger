@@ -172,6 +172,8 @@ namespace tui
     LineRef ref;
     model::Group* group = nullptr;
     model::Row* row = nullptr;
+    // A group of one log is one line: the mod's name, then the log
+    bool single = false;
   };
 
   // Where things were drawn on the last frame, for the keys and the mouse
@@ -361,6 +363,13 @@ namespace tui
       // A search or level filter hides groups with nothing left in them
       if (!any && filtering())
         lines.resize(start);
+      // Mods taking turns with one log each would take two rows a log
+      else if (!group.collapsed && lines.size() == start + 2)
+      {
+        lines[start] = lines[start + 1];
+        lines[start].single = true;
+        lines.pop_back();
+      }
     }
     return lines;
   }
@@ -374,7 +383,8 @@ namespace tui
     {
       if (lines[i].ref == *ref)
         return i;
-      if (lines[i].ref.group == ref->group && lines[i].ref.row == -1)
+      // A group of one log has no header line, its log stands for it
+      if (lines[i].ref.group == ref->group && (lines[i].ref.row == -1 || lines[i].single))
         header = i;
     }
     // The row was folded away or filtered out, its group's header stands in
@@ -854,7 +864,7 @@ namespace tui
     for (int i = from + direction; i >= 0 && i < count; i += direction)
     {
       auto const& line = lines[i];
-      bool hit = groups ? line.row == nullptr
+      bool hit = groups ? line.row == nullptr || line.single
                         : line.group->marker || (line.row && line.row->record.severity >= Severity::Warning);
       if (!hit)
         continue;
@@ -1839,14 +1849,24 @@ namespace tui
     }
   }
 
-  static void drawRow(Cells& row, settings::Config const& config, model::Group const& group, model::Row const& logRow, std::string_view time, bool selected)
+  static void drawRow(Cells& row, settings::Config const& config, model::Group const& group, model::Row const& logRow, std::string_view time, bool selected, bool single = false)
   {
     auto const& record = logRow.record;
     int bg = selected ? SELECT_BG : -1;
     auto [prefixColor, messageColor] = look::severityColors(record.severity);
 
-    row.put("   ", {-1, bg});
-    row.put("│ ", {group.color, bg});
+    if (single)
+    {
+      // The mod's name where the header would be
+      row.put(" ● ", {group.color, bg});
+      row.put(group.source.name, {group.color, bg, true});
+      row.put("  ", {-1, bg});
+    }
+    else
+    {
+      row.put("   ", {-1, bg});
+      row.put("│ ", {group.color, bg});
+    }
     // The column keeps the clock's width in every time mode
     int timeWidth = static_cast<int>(record.time.size());
     row.put(fmt::format("{:>{}}", time, timeWidth), {s.timeMode == TimeMode::Clock ? DIM : KEY_FG, bg});
@@ -2333,7 +2353,7 @@ namespace tui
         if (line.group->marker)
           drawMarker(main, *line.group, selected);
         else if (line.row)
-          drawRow(main, *config, *line.group, *line.row, timeFor(lines, top + i), selected);
+          drawRow(main, *config, *line.group, *line.row, timeFor(lines, top + i), selected, line.single);
         else
           drawHeader(main, *config, *line.group, selected);
       }
