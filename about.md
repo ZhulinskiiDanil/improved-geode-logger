@@ -21,7 +21,7 @@ Press <cy>?</c> in the console for every key.
 
 ## For making mods
 
-- **Errors in the game**: an error pops up as a notification in the game, so it isn't missed while the console is behind it. One every few seconds at most, only from the focused mods if there are some.
+- **Errors in the game**: an error pops up as a notification in the game, so it isn't missed while the console is behind it. One every few seconds at most, only from the focused mods if there are some. The console window's title counts the errors too, so the taskbar shows them.
 - **Game and console**: <cy>Ctrl+Shift+L</c> in the game brings the console forward, <cy>`</c> in the console brings the game back.
 - **Markers**: <cy>b</c> in the console, or <cy>Ctrl+Shift+M</c> in the game, puts a marker line into the logs. Do something in the game, and everything logged after it is right under the marker. <cy>n</c> jumps between markers, warnings and errors.
 - **Rebuilt mods**: when a `.geode` in the mods folder changes (`geode build` installs it), a banner says so and <cy>Shift+R</c> restarts the game.
