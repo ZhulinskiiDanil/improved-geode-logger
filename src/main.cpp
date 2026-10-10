@@ -1,6 +1,8 @@
 #include "Console.hpp"
 #include "DevLoop.hpp"
 #include "Grouper.hpp"
+#include "History.hpp"
+#include "Model.hpp"
 #include "Settings.hpp"
 #include "Tui.hpp"
 
@@ -22,6 +24,27 @@ $on_mod(Loaded)
                            grouper::handle(log);
                            return false; })
       .leak();
+
+  // What Geode logged before this mod loaded is in its log file: the interactive screen starts with it.
+  // Grouping is still off, so nothing logged meanwhile goes missing from the console
+  log::flush();
+  auto config = settings::read();
+  history::read(model::get(), log::getCurrentLogPath(), *config);
+  {
+    auto& model = model::get();
+    std::lock_guard lock(model.mutex);
+    if (model.logs > 0)
+      model.addMarker(Record{
+          .kind = RecordKind::Marker,
+          .source = {nullptr, "Marker", ""},
+          .color = 245,
+          .time = model.groups.back().lastTime,
+          .millis = model.groups.back().rows.back().record.millis,
+          .content = "Improved Logger loaded · the logs above come from the log file",
+      });
+    // The developer's own markers still start at 1
+    model.markers = 0;
+  }
 
   tui::start();
   settings::load();

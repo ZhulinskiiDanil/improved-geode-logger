@@ -35,6 +35,9 @@ namespace settings
 
   void load();
 
+  // The settings as they are now, without turning anything on
+  std::shared_ptr<Config const> read();
+
   // Safe from any thread, the logs come from Geode's log worker
   std::shared_ptr<Config const> get();
 }

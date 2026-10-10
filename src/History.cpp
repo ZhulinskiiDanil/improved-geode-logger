@@ -3,6 +3,9 @@
 #include "Text.hpp"
 
 #include <Geode/Geode.hpp>
+#include <charconv>
+#include <ctime>
+#include <fstream>
 #include <unordered_map>
 
 using namespace geode::prelude;
@@ -119,10 +122,44 @@ namespace history
     return parsed;
   }
 
-  std::unique_ptr<model::Model> load(std::filesystem::path const& path, settings::Config const& config)
+  // Local midnight of the day in "Geode 2026-10-10 15.23.03.log", in milliseconds since the epoch
+  static int64_t dayStart(std::filesystem::path const& path)
   {
-    auto model = std::make_unique<model::Model>();
-    auto text = file::readString(path).unwrapOr("");
+    auto name = path.filename().string();
+    std::tm day{};
+    auto number = [&](size_t from, size_t length, int& out)
+    {
+      auto begin = name.data() + from;
+      return std::from_chars(begin, begin + length, out).ec == std::errc();
+    };
+    if (name.starts_with("Geode ") && name.size() >= 16 && name[10] == '-' && name[13] == '-' &&
+        number(6, 4, day.tm_year) && number(11, 2, day.tm_mon) && number(14, 2, day.tm_mday))
+    {
+      day.tm_year -= 1900;
+      day.tm_mon -= 1;
+      day.tm_isdst = -1;
+      auto time = std::mktime(&day);
+      if (time != -1)
+        return static_cast<int64_t>(time) * 1000;
+    }
+    return 0;
+  }
+
+  // Geode's readString doesn't share the file with a writer, and Geode is still writing the current log
+  static std::string readShared(std::filesystem::path const& path)
+  {
+    std::ifstream stream(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+  }
+
+  void read(model::Model& model, std::filesystem::path const& path, settings::Config const& config)
+  {
+    auto text = readShared(path);
+    std::lock_guard lock(model.mutex);
+    // The lines only have the time of day, the file's name has the day
+    auto start = dayStart(path);
+    int64_t lastTime = -1;
+    int64_t days = 0;
 
     // Names in the file back to mods, for their colors and cards
     std::unordered_map<std::string, Mod*> mods;
@@ -143,12 +180,12 @@ namespace history
           .nest = pending->nest,
           .color = config.modColors && mod ? text::colorFor(mod->getID()) : look::PLAIN_MOD_COLOR,
           .time = pending->time,
-          .millis = pending->millis,
+          .millis = start + days * 86400000 + pending->millis,
           .content = text::clean(pending->content),
       };
       if (config.collapse == settings::Collapse::Similar)
         record.pattern = text::withoutNumbers(record.content);
-      model->add(std::move(record), config);
+      model.add(std::move(record), config);
       pending.reset();
     };
 
@@ -157,6 +194,10 @@ namespace history
       if (auto parsed = parseLine(line))
       {
         flush();
+        // A session that went past midnight
+        if (parsed->millis < lastTime)
+          days++;
+        lastTime = parsed->millis;
         pending = std::move(parsed);
       }
       // Lines of a log written over several lines
@@ -164,6 +205,12 @@ namespace history
         pending->content += "\n" + std::string(line);
     }
     flush();
+  }
+
+  std::unique_ptr<model::Model> load(std::filesystem::path const& path, settings::Config const& config)
+  {
+    auto model = std::make_unique<model::Model>();
+    read(*model, path, config);
     return model;
   }
 }

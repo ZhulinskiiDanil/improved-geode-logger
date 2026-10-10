@@ -38,6 +38,8 @@ namespace tui
   static constexpr int MATCH_BG = 221;
   static constexpr int SIDEBAR_WIDTH = 30;
   static constexpr auto FRAME_TIME = std::chrono::milliseconds(33);
+  static constexpr int BANNER_REBUILT = 0;
+  static constexpr int BANNER_CRASH = 1;
 
   struct Style
   {
@@ -177,6 +179,8 @@ namespace tui
     int sidebarTop = 0;
     // Screen row of the list's first line
     int listTop = 1;
+    // What each banner under the title does when clicked
+    std::vector<int> banners;
   };
 
   enum class TimeMode
@@ -230,6 +234,7 @@ namespace tui
     int pickerIndex = 0;
 
     uint64_t logsAtPause = 0;
+    int errorsAtPause = 0;
     std::string flash;
     std::chrono::steady_clock::time_point flashUntil;
   };
@@ -508,6 +513,7 @@ namespace tui
       return;
     s.follow = false;
     s.logsAtPause = viewModel().logs;
+    s.errorsAtPause = viewModel().severityCounts[Severity::Error - Severity::Trace];
     if (!s_view.empty())
     {
       s.selected = s_view.back();
@@ -1442,6 +1448,19 @@ namespace tui
       return;
     }
 
+    // A banner does what its keys do
+    if (y >= 1 && y < s_layout.listTop && y - 1 < static_cast<int>(s_layout.banners.size()))
+    {
+      if (s_layout.banners[y - 1] == BANNER_REBUILT)
+      {
+        flash("Restarting the game…");
+        devloop::restart();
+      }
+      else
+        openCrash();
+      return;
+    }
+
     int listRow = y - s_layout.listTop;
     if (listRow < 0 || listRow >= s_layout.listRows)
       return;
@@ -1534,7 +1553,16 @@ namespace tui
     else
     {
       auto fresh = model.logs - std::min(model.logs, s.logsAtPause);
-      row.right(fresh ? fmt::format("❚❚ PAUSED  +{} new  End ", compact(fresh)) : std::string("❚❚ PAUSED  End "), {PAUSED, BAR_BG, true});
+      // New errors while looking elsewhere are worth knowing about
+      auto freshErrors = model.severityCounts[Severity::Error - Severity::Trace] - s.errorsAtPause;
+      std::string text = fresh ? fmt::format("❚❚ PAUSED  +{} new  End ", compact(fresh)) : std::string("❚❚ PAUSED  End ");
+      if (freshErrors > 0)
+      {
+        auto errors = fmt::format("✖ {} new  ", freshErrors);
+        row.pad(row.used() + row.left() - text::width(text) - text::width(errors), {-1, BAR_BG});
+        row.put(errors, {ERROR_COLOR, BAR_BG, true});
+      }
+      row.right(text, {PAUSED, BAR_BG, true});
     }
   }
 
@@ -1952,16 +1980,21 @@ namespace tui
 
     // Banners under the title: rebuilt mods, the last crash
     std::vector<std::pair<std::string, int>> banners;
+    std::vector<int> bannerKinds;
     auto updated = devloop::updatedMods();
     if (!updated.empty())
     {
       std::string ids;
       for (auto const& id : updated)
         ids += (ids.empty() ? "" : ", ") + id;
-      banners.emplace_back(fmt::format(" ⟳ {} rebuilt · Shift+R restarts the game to load it", ids), 221);
+      banners.emplace_back(fmt::format(" ⟳ {} rebuilt · Shift+R or a click restarts the game to load it", ids), 221);
+      bannerKinds.push_back(BANNER_REBUILT);
     }
     if (auto crash = devloop::lastCrash())
-      banners.emplace_back(fmt::format(" ✖ The last session crashed at {} · o opens the crash log", crash->time), ERROR_COLOR);
+    {
+      banners.emplace_back(fmt::format(" ✖ The last session crashed at {} · o or a click opens the crash log", crash->time), ERROR_COLOR);
+      bannerKinds.push_back(BANNER_CRASH);
+    }
     int bannerRows = std::min(static_cast<int>(banners.size()), std::max(0, height - 4));
 
     // The details panel takes the lower part of the screen
@@ -2046,6 +2079,7 @@ namespace tui
         .top = top,
         .sidebarTop = sidebarTop,
         .listTop = 1 + bannerRows,
+        .banners = std::move(bannerKinds),
     };
 
     Cells title(width, BAR_BG);
@@ -2225,6 +2259,7 @@ namespace tui
     uint64_t drawnRevision = 0;
     auto lastFrame = std::chrono::steady_clock::now();
     auto lastPoll = lastFrame;
+    std::chrono::steady_clock::duration frameGap = FRAME_TIME;
     size_t updatedCount = 0;
     bool flashing = false;
 
@@ -2272,12 +2307,17 @@ namespace tui
       // "3s ago" and logs per second move without new logs
       if (now - lastFrame >= std::chrono::seconds(1))
         s_dirty = true;
-      if ((s_dirty || revision != drawnRevision) && now - lastFrame >= FRAME_TIME)
+      if ((s_dirty || revision != drawnRevision) && now - lastFrame >= frameGap)
       {
         render();
         s_dirty = false;
         drawnRevision = revision;
         lastFrame = now;
+
+        // A slow frame (a regex over a big history) waits longer before the next one,
+        // the log thread needs the model's lock too
+        auto took = std::chrono::steady_clock::now() - now;
+        frameGap = std::max<std::chrono::steady_clock::duration>(FRAME_TIME, took * 3);
       }
     }
   }

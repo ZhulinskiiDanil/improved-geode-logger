@@ -52,7 +52,7 @@ namespace settings
     return Collapse::Similar;
   }
 
-  static void reload()
+  std::shared_ptr<Config const> read()
   {
     auto mod = Mod::get();
     auto config = std::make_shared<Config>();
@@ -72,7 +72,12 @@ namespace settings
       config->consoleLevel = parseLevel(geode->getSettingValue<std::string>("console-log-level"));
       config->millis = geode->getSettingValue<bool>("log-milliseconds");
     }
+    return config;
+  }
 
+  static void reload()
+  {
+    auto config = read();
     console::setGrouping(config->enabled);
     bool interactive = config->enabled && config->interactive;
 
