@@ -14,6 +14,20 @@ permissions:
   contents: write
 
 jobs:
+  # The parts without Geode in them, with GCC too
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run the tests
+        run: |
+          cmake -S tests -B build-tests
+          cmake --build build-tests
+          ctest --test-dir build-tests --output-on-failure
+
   build:
     name: Windows
     runs-on: windows-latest
