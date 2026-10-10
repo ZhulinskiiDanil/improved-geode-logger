@@ -184,6 +184,29 @@ static void testCounts()
   CHECK(model.groups.empty() && model.logs == 0 && model.mods.empty());
 }
 
+static void testTrimming()
+{
+  model::Model model;
+  auto c = config(settings::Collapse::Identical);
+  // Different lines from one mod without a pause: everything is one group
+  for (int i = 0; i < 70000; i++)
+    add(model, c, {"line " + std::to_string(i), i});
+  CHECK(model.groups.size() == 1);
+  CHECK(model.groups.front().rows.size() <= 50000);
+  // The newest stay, the oldest went
+  CHECK(model.groups.front().rows.back().record.content == "line 69999");
+  CHECK(model.logs == 70000);
+
+  // Many groups: whole old groups go
+  model::Model groups;
+  for (int i = 0; i < 70000; i++)
+    add(groups, c, {"line " + std::to_string(i), i, i % 2 ? "A" : "B"});
+  size_t rows = 0;
+  for (auto const& group : groups.groups)
+    rows += group.rows.size();
+  CHECK(rows <= 50000);
+}
+
 static void testRate()
 {
   model::ModStats stats;
@@ -207,6 +230,7 @@ int main()
   testThreads();
   testMarkers();
   testCounts();
+  testTrimming();
   testRate();
   return finish("model");
 }

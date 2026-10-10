@@ -288,7 +288,11 @@ namespace devloop
       return;
 
     if (crashTimes->written >= previousTimes->created && crashTimes->written <= currentTimes->created)
+    {
+      // The screen's thread is already running and reads it
+      std::lock_guard lock(s_mutex);
       s_crash = Crash{crash->string(), localTime(crashTimes->written)};
+    }
   }
 
   std::optional<Crash> lastCrash()

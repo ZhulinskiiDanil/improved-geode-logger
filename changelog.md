@@ -13,6 +13,7 @@
 - The help scrolls (Up, Down, the wheel, Page Down): it was cut off in smaller windows
 - A click on a mod in the list picks it, a double click hides it (a stray click hid mods)
 - What a `re:` search finds is marked in the lines too
+- The history stays at 50 000 rows when one mod writes without a pause too: one long group kept growing
 - Tests for the folding of repeats, the search and the reading of log files, run in CI
 
 # v1.4.0

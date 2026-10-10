@@ -131,10 +131,25 @@ namespace model
       m_rows++;
     }
 
-    while (m_rows > MAX_ROWS && groups.size() > 1)
+    while (m_rows > MAX_ROWS)
     {
-      m_rows -= groups.front().rows.size();
-      groups.pop_front();
+      if (groups.size() > 1)
+      {
+        m_rows -= groups.front().rows.size();
+        groups.pop_front();
+        continue;
+      }
+
+      // One mod writing without a pause fills a single group: its oldest rows go, a tenth at a time
+      auto& only = groups.front();
+      auto drop = std::min(only.rows.size() - 1, MAX_ROWS / 10);
+      if (drop == 0)
+        break;
+      only.rows.erase(only.rows.begin(), only.rows.begin() + static_cast<std::ptrdiff_t>(drop));
+      m_rows -= drop;
+      // The repeating block's rows moved
+      m_cycle.reset();
+      m_floor = 0;
     }
 
     revision.fetch_add(1, std::memory_order::relaxed);
