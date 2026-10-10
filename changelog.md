@@ -1,6 +1,8 @@
 # v1.4.1
 
 - On the first launch without Geode's console, a popup offers to turn it on and restart
+- The log levels set in the mods list stay for the next launches, 0 sets a mod back to everything
+- Up and Down go through earlier searches while typing one, kept between launches
 - Tests for the folding of repeats, the search and the reading of log files, run in CI
 
 # v1.4.0

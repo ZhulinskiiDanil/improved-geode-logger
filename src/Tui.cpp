@@ -12,7 +12,6 @@
 #include <atomic>
 #include <chrono>
 #include <map>
-#include <regex>
 #include <set>
 #include <thread>
 
@@ -214,6 +213,9 @@ namespace tui
     int minLevel = Severity::Trace;
     std::string search;
     bool typing = false;
+    // Earlier searches, newest last, and where Up and Down are in them while typing
+    std::vector<std::string> searches;
+    int searchIndex = -1;
 
     bool sidebar = false;
     bool sidebarFocus = false;
@@ -713,20 +715,23 @@ namespace tui
     s.watchPanel = mod->getSavedValue<bool>("ui-watches", true);
     for (auto const& name : mod->getSavedValue<std::vector<std::string>>("ui-hidden", {}))
       s.hiddenMods.insert(name);
+    s.searches = mod->getSavedValue<std::vector<std::string>>("ui-searches", {});
   }
 
   // Saved values belong to the main thread
   static void saveState()
   {
     Loader::get()->queueInMainThread([level = s.minLevel, time = static_cast<int>(s.timeMode), sidebar = s.sidebar,
-                                      watches = s.watchPanel, hidden = std::vector<std::string>(s.hiddenMods.begin(), s.hiddenMods.end())]
+                                      watches = s.watchPanel, hidden = std::vector<std::string>(s.hiddenMods.begin(), s.hiddenMods.end()),
+                                      searches = s.searches]
                                      {
       auto mod = Mod::get();
       mod->setSavedValue("ui-level", level);
       mod->setSavedValue("ui-time", time);
       mod->setSavedValue("ui-sidebar", sidebar);
       mod->setSavedValue("ui-watches", watches);
-      mod->setSavedValue("ui-hidden", hidden); });
+      mod->setSavedValue("ui-hidden", hidden);
+      mod->setSavedValue("ui-searches", searches); });
   }
 
   static void toggleMod(int index)
@@ -900,6 +905,54 @@ namespace tui
     requestCard(*name);
   }
 
+  // A mod's own level and logging, kept between launches: Geode forgets them on a restart
+  static void saveModLevel(Mod* mod)
+  {
+    Loader::get()->queueInMainThread([mod]
+                                     {
+      auto saved = Mod::get()->getSavedValue<matjson::Value>("mod-levels", matjson::Value::object());
+      if (!saved.isObject())
+        saved = matjson::Value::object();
+      std::string id(mod->getID());
+      // Back to Geode's own: everything, logging on
+      if (mod->getLogLevel() == Severity::Trace && mod->isLoggingEnabled())
+        saved.erase(id);
+      else
+        saved[id] = matjson::makeObject({{"level", static_cast<int>(mod->getLogLevel())}, {"logging", mod->isLoggingEnabled()}});
+      Mod::get()->setSavedValue("mod-levels", saved); });
+  }
+
+  // Before the other mods load, so their own loading logs follow the levels too
+  static void applyModLevels()
+  {
+    auto saved = Mod::get()->getSavedValue<matjson::Value>("mod-levels", matjson::Value::object());
+    if (!saved.isObject())
+      return;
+    for (auto const& [id, value] : saved)
+    {
+      auto mod = Loader::get()->getInstalledMod(id);
+      if (!mod)
+        continue;
+      auto level = std::clamp(value["level"].asInt().unwrapOr(Severity::Trace), static_cast<int64_t>(Severity::Trace), static_cast<int64_t>(Severity::Error));
+      mod->setLogLevel(Severity::cast(static_cast<int>(level)));
+      mod->setLoggingEnabled(value["logging"].asBool().unwrapOr(true));
+    }
+  }
+
+  static void resetModLevel()
+  {
+    auto name = sidebarModName();
+    auto mod = name ? modNamed(*name) : nullptr;
+    if (!mod)
+      return;
+    mod->setLogLevel(Severity::Trace);
+    mod->setLoggingEnabled(true);
+    saveModLevel(mod);
+    flash(fmt::format("{} logs everything again", *name));
+    if (s.detailMod == name)
+      requestCard(*name);
+  }
+
   static void changeModLevel(int delta)
   {
     auto name = sidebarModName();
@@ -912,6 +965,7 @@ namespace tui
 
     int level = std::clamp(static_cast<int>(mod->getLogLevel()) + delta, static_cast<int>(Severity::Trace), static_cast<int>(Severity::Error));
     mod->setLogLevel(Severity::cast(level));
+    saveModLevel(mod);
     flash(fmt::format("{} logs from {} up", *name, levelName(level)));
     if (s.detailMod == name)
       requestCard(*name);
@@ -928,6 +982,7 @@ namespace tui
     }
 
     mod->setLoggingEnabled(!mod->isLoggingEnabled());
+    saveModLevel(mod);
     flash(fmt::format("{} logs {}", *name, mod->isLoggingEnabled() ? "on" : "off, in the log file too"));
     if (s.detailMod == name)
       requestCard(*name);
@@ -958,16 +1013,49 @@ namespace tui
 
   // ! --- Keys --- !
 
+  static void rememberSearch()
+  {
+    if (s.search.empty())
+      return;
+    std::erase(s.searches, s.search);
+    s.searches.push_back(s.search);
+    if (s.searches.size() > 20)
+      s.searches.erase(s.searches.begin());
+    saveState();
+  }
+
   static void onTyping(KEY_EVENT_RECORD const& key)
   {
+    int count = static_cast<int>(s.searches.size());
     switch (key.wVirtualKeyCode)
     {
     case VK_RETURN:
       s.typing = false;
+      rememberSearch();
+      s.searchIndex = -1;
+      return;
+    // Up and Down go through the earlier searches
+    case VK_UP:
+      if (count == 0)
+        return;
+      s.searchIndex = s.searchIndex < 0 ? count - 1 : std::max(0, s.searchIndex - 1);
+      s.search = s.searches[s.searchIndex];
+      return;
+    case VK_DOWN:
+      if (s.searchIndex < 0)
+        return;
+      if (++s.searchIndex >= count)
+      {
+        s.searchIndex = -1;
+        s.search.clear();
+      }
+      else
+        s.search = s.searches[s.searchIndex];
       return;
     case VK_ESCAPE:
       s.typing = false;
       s.search.clear();
+      s.searchIndex = -1;
       return;
     case VK_BACK:
       // Drop the last UTF-8 character
@@ -1054,6 +1142,8 @@ namespace tui
       changeModLevel(1);
     else if (c == L'l')
       toggleModLogging();
+    else if (c == L'0')
+      resetModLevel();
     else if (c == L'k')
     {
       s.sidebarIndex = std::max(0, s.sidebarIndex - 1);
@@ -1713,7 +1803,7 @@ namespace tui
       row.put(" / ", {KEY_FG, BAR_BG, true});
       row.put(s.search, {255, BAR_BG});
       row.put("█", {KEY_FG, BAR_BG});
-      row.right("Enter keep · Esc clear ", {DIM, BAR_BG});
+      row.right(s.searches.empty() ? "Enter keep · Esc clear " : "↑↓ earlier · Enter keep · Esc clear ", {DIM, BAR_BG});
       return;
     }
 
@@ -1822,7 +1912,8 @@ namespace tui
         "  Space            hide or show the mod's logs here",
         "  s / a            only this mod / every mod",
         "  Enter            the mod's card: version, hooks, logs per second",
-        "  + / -  l         more or fewer of its logs, turn its logging off (log file too)",
+        "  + / -  l  0      more or fewer of its logs, logging off (log file too), back to all",
+        "                   these stay for the next launches",
         "",
         "  MOUSE",
         "",
@@ -2259,6 +2350,11 @@ namespace tui
     if (s_started.exchange(true))
       return;
     loadState();
+    applyModLevels();
+    // Some mods set their own level while they load: once they all did, the saved ones win again
+    GameEvent(GameEventType::Loaded).listen([]
+                                            { applyModLevels(); })
+        .leak();
     std::thread(run).detach();
   }
 
