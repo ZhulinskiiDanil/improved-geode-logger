@@ -1454,6 +1454,9 @@ namespace tui
     case L'E':
       copyProblems();
       break;
+    case L'`':
+      console::showGame();
+      break;
     case L'w':
       exportView();
       break;
@@ -1952,6 +1955,7 @@ namespace tui
         "  w / W            save what the filters show to a file / open the folder",
         "  Y                copy as Markdown, for a bug report",
         "  E                copy every warning and error, by mod, as Markdown",
+        "  `                back to the game, Ctrl+Shift+L in the game comes back here",
         "",
         "  MODS LIST",
         "",

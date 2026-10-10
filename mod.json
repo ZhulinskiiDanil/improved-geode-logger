@@ -83,6 +83,13 @@
 				"Errors and warnings"
 			]
 		},
+		"console-key": {
+			"name": "Show the console",
+			"description": "Brings the console in front of the game. <cy>`</c> in the console brings the game back",
+			"type": "keybind",
+			"default": "Ctrl+Shift+L",
+			"category": "universal"
+		},
 		"marker-key": {
 			"name": "Marker key",
 			"description": "Puts a marker line into the logs from the game, to see what got logged after you did something. <cy>b</c> does the same in the console",

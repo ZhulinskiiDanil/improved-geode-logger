@@ -25,6 +25,10 @@ namespace console
 
   void write(std::string_view utf8);
 
+  // Brings the console's window in front of the game, or the game in front of the console
+  void showConsole();
+  void showGame();
+
   // While off, Geode writes to the console as usual
   void setGrouping(bool enabled);
   bool isGrouping();

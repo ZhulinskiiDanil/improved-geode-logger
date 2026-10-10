@@ -50,6 +50,12 @@ $on_mod(Loaded)
   settings::load();
   devloop::start();
 
+  // The console in front of the game, without alt-tabbing to it
+  listenForKeybindSettingPresses("console-key", [](Keybind const&, bool down, bool repeat, double)
+                                 {
+                                   if (down && !repeat)
+                                     console::showConsole(); });
+
   // A marker straight from the game, without going to the console
   listenForKeybindSettingPresses("marker-key", [](Keybind const&, bool down, bool repeat, double)
                                  {

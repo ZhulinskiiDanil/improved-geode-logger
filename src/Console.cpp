@@ -161,6 +161,51 @@ namespace console
     WriteConsoleW(s_handle, wide.data(), static_cast<DWORD>(wide.size()), &written, nullptr);
   }
 
+  // ! --- Windows --- !
+
+  // Windows lets only the foreground's own thread hand the focus over, so it borrows that thread's input
+  static void bringForward(HWND window)
+  {
+    if (!window)
+      return;
+    if (IsIconic(window))
+      ShowWindow(window, SW_RESTORE);
+
+    auto foreground = GetForegroundWindow();
+    auto foregroundThread = foreground ? GetWindowThreadProcessId(foreground, nullptr) : 0;
+    auto thread = GetCurrentThreadId();
+    bool attached = foregroundThread && foregroundThread != thread && AttachThreadInput(thread, foregroundThread, TRUE);
+    SetForegroundWindow(window);
+    BringWindowToTop(window);
+    if (attached)
+      AttachThreadInput(thread, foregroundThread, FALSE);
+  }
+
+  void showConsole()
+  {
+    // In Windows Terminal the console's own window is hidden, the terminal owns it
+    auto window = GetConsoleWindow();
+    auto owner = window ? GetAncestor(window, GA_ROOTOWNER) : nullptr;
+    bringForward(owner ? owner : window);
+  }
+
+  static BOOL CALLBACK findGameWindow(HWND window, LPARAM found)
+  {
+    DWORD process = 0;
+    GetWindowThreadProcessId(window, &process);
+    if (process != GetCurrentProcessId() || !IsWindowVisible(window) || window == GetConsoleWindow())
+      return TRUE;
+    *reinterpret_cast<HWND*>(found) = window;
+    return FALSE;
+  }
+
+  void showGame()
+  {
+    HWND game = nullptr;
+    EnumWindows(findGameWindow, reinterpret_cast<LPARAM>(&game));
+    bringForward(game);
+  }
+
   void setGrouping(bool enabled)
   {
     s_grouping.store(enabled && isOpen(), std::memory_order::relaxed);
