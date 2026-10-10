@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <map>
+#include <regex>
 #include <set>
 #include <thread>
 
@@ -1753,7 +1754,15 @@ namespace tui
   static void putMarked(Cells& row, std::string_view message, Style style, int reserve)
   {
     auto const& marks = query().marks;
-    if (marks.empty())
+    // The regexes being looked for are marked too
+    std::vector<std::regex const*> regexes;
+    for (auto const& term : query().terms)
+    {
+      if (term.field == search::Term::Field::Regex && !term.negate && term.regex)
+        regexes.push_back(&*term.regex);
+    }
+
+    if (marks.empty() && regexes.empty())
     {
       row.put(message, style, reserve);
       return;
@@ -1762,7 +1771,7 @@ namespace tui
     size_t from = 0;
     while (from < message.size() && row.left() > reserve)
     {
-      // The nearest of the searched words
+      // The nearest of the searched words and regex matches
       size_t found = std::string_view::npos;
       size_t length = 0;
       for (auto const& mark : marks)
@@ -1772,6 +1781,19 @@ namespace tui
         {
           found = at;
           length = mark.size();
+        }
+      }
+      for (auto regex : regexes)
+      {
+        std::match_results<std::string_view::const_iterator> match;
+        if (std::regex_search(message.begin() + from, message.end(), match, *regex) && match.length(0) > 0)
+        {
+          auto at = from + static_cast<size_t>(match.position(0));
+          if (at < found)
+          {
+            found = at;
+            length = static_cast<size_t>(match.length(0));
+          }
         }
       }
       if (found == std::string_view::npos)
