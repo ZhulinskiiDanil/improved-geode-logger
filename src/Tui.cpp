@@ -2053,7 +2053,7 @@ namespace tui
         "  ] / [            the next / previous group",
         "  t                time: clock, since the log before, the group's start, the marker above",
         "  M                only what came after the last marker",
-        "  Shift+R          restart the game, the banner says when a .geode was rebuilt",
+        "  Shift+R          restart the game, the banner says when a mod's .geode changed",
         "  o                open the crash log of the last session",
         "  P                the mods Geode couldn't load, and why",
         "  L                open an older log file of Geode, Esc goes back to live",
@@ -2160,7 +2160,7 @@ namespace tui
     for (auto const& line : lines)
       s_view.push_back(line.ref);
 
-    // Banners under the title: rebuilt mods, the last crash
+    // Banners under the title: updated mods, load problems, the last crash
     std::vector<std::pair<std::string, int>> banners;
     std::vector<int> bannerKinds;
     auto updated = devloop::updatedMods();
@@ -2168,8 +2168,8 @@ namespace tui
     {
       std::string ids;
       for (auto const& id : updated)
-        ids += (ids.empty() ? "" : ", ") + id;
-      banners.emplace_back(fmt::format(" ⟳ {} rebuilt · Shift+R or a click restarts the game to load it", ids), 221);
+        ids += (ids.empty() ? "" : ", ") + devloop::modName(id);
+      banners.emplace_back(fmt::format(" ⟳ {} updated · Shift+R or a click restarts the game to load it", ids), 221);
       bannerKinds.push_back(BANNER_REBUILT);
     }
     if (auto problems = devloop::loadProblems(); !problems.empty())

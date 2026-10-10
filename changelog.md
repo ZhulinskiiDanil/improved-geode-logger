@@ -15,6 +15,7 @@
 - What a `re:` search finds is marked in the lines too
 - The history stays at 50 000 rows when one mod writes without a pause too: one long group kept growing
 - `H` saves the logs as a page to open in a browser or send: groups fold, levels in color, a filter box
+- The banner for a changed `.geode` names the mod and says updated: a manager installing an update shows it too
 - Tests for the folding of repeats, the search and the reading of log files, run in CI
 
 # v1.4.0

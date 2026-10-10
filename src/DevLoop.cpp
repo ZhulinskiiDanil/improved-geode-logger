@@ -108,8 +108,14 @@ namespace devloop
     if (!tui::isActive() && console::isGrouping())
     {
       for (auto const& id : fresh)
-        grouper::printRule(fmt::format("{} was rebuilt · restart the game to load it", id), 221);
+        grouper::printRule(fmt::format("{} was updated · restart the game to load it", modName(id)), 221);
     }
+  }
+
+  std::string modName(std::string const& id)
+  {
+    auto mod = Loader::get()->getInstalledMod(id);
+    return mod ? std::string(mod->getName()) : id;
   }
 
   std::vector<std::string> updatedMods()

@@ -16,8 +16,10 @@ namespace devloop
   // Looks for builds that changed since the game started, about once a second
   void poll();
 
-  // IDs of the mods whose .geode changed, the game needs a restart to load them
+  // IDs of the mods whose .geode changed (rebuilt, or updated by a manager), the game needs a restart to load them
   std::vector<std::string> updatedMods();
+  // The mod's name for an ID, or the ID for a mod Geode doesn't know yet
+  std::string modName(std::string const& id);
 
   void restart();
 
