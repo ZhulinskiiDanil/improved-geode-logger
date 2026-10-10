@@ -2,7 +2,7 @@
 
 A Geode mod that turns Geometry Dash's platform console into an interactive screen for the logs: groups by mod, folds repeated lines, search, level and mod filters, markers, a restart key for the loop of building a mod, and an API to pin values instead of logging them every frame. Windows only.
 
-Turn on **Show Platform Console** in Geode's settings to see the console, and press `?` in it for every key. Log files stay exactly as Geode writes them.
+Turn on **Show Platform Console** in Geode's settings to see the console (on the first launch without it, the mod offers to), and press `?` in it for every key. Log files stay exactly as Geode writes them.
 
 ## Install
 
@@ -15,9 +15,9 @@ Download `zhulis.improved-logger.geode` from the [releases](https://github.com/Z
 | `↑` `↓` `PgUp` `PgDn` `Home` `End` | Move, scrolling up pauses the live view, `End` goes back to it |
 | `Space` `←` `→`, `c` `e` | Fold or unfold a group, all groups |
 | `Enter`, `d` | A log in full |
-| `/` | Search: `word -word "a phrase" mod:name thread:name level:warn re:regex` |
+| `/` | Search: `word -word "a phrase" mod:name thread:name level:warn re:regex`, `↑` `↓` for earlier searches |
 | `1`–`5` | Show from TRACE, DEBUG, INFO, WARN or ERROR up |
-| `Tab`, `m` | The mods list: `Space` hides a mod, `s` shows only it, `a` all, `+` `-` change its log level, `l` turns its logging off, `Enter` opens its card |
+| `Tab`, `m` | The mods list: `Space` hides a mod, `s` shows only it, `a` all, `+` `-` change its log level, `l` turns its logging off, `0` back to everything (levels stay for the next launches), `Enter` opens its card |
 | `b`, `Ctrl+Shift+M` in the game | A marker line |
 | `n` `N`, `]` `[` | Next / previous warning, error or marker, next / previous group |
 | `t` | Time: clock, since the log before, since the group's start |
