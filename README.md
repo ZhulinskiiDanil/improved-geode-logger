@@ -21,10 +21,12 @@ Download `zhulis.improved-logger.geode` from the [releases](https://github.com/Z
 | `b`, `Ctrl+Shift+M` in the game | A marker line |
 | `n` `N`, `]` `[` | Next / previous warning, error or marker, next / previous group |
 | `t` | Time: clock, since the log before, since the group's start |
-| `Shift+R` | Restart the game, a banner says when a `.geode` was rebuilt |
-| `o` | The crash log of the last session |
+| `Shift+R` | Restart the game, a banner says when a `.geode` was rebuilt (a click on it works too) |
+| `o` | The crash log of the last session (or a click on its banner) |
 | `L` | An older log file of Geode |
-| `y` `Ctrl+C`, `Y` | Copy the log or the group, as Markdown |
+| `y` `Ctrl+C` right click, `Y` | Copy the log or the group, as Markdown |
+| `E` | Copy every warning and error, by mod, as Markdown |
+| `` ` ``, `Ctrl+Shift+L` in the game | Back to the game, back to the console |
 | `w`, `W` | Save what the filters show to a file, open the folder |
 | `v` | Show or hide the watched values |
 | `f`, `x`, `?` | Pause, clear the screen, help |

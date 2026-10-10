@@ -1,3 +1,18 @@
+# v1.4.0
+
+- The interactive console starts with what Geode logged before the mod loaded, read from the log file
+- Errors pop up in the game too, so they aren't missed behind the game window (a setting: off, errors, or warnings too)
+- `Ctrl+Shift+L` in the game brings the console forward, `` ` `` in the console brings the game back
+- One group per mod across threads: lines from other threads show the thread's name (Separate threads is a setting)
+- `E` copies every warning and error of the session as Markdown, grouped by mod
+- A right click copies the line under it
+- The mods list shows the logs per second of a mod writing 5 or more a second
+- A paused view counts the new errors in the top bar
+- A click on a banner does what its key does (restart, open the crash log)
+- Older log files get their real dates, for the time between logs
+- A slow frame (a regex over a big history) waits longer before the next one, so the log thread isn't held up
+- A logo
+
 # v1.3.0
 
 - An API for other mods (`include/ImprovedLogger.hpp`, no hard dependency): `watch` pins values in a panel of the console that updates in place, `Timer` logs how long code took, `mark` puts a marker from code
