@@ -24,7 +24,7 @@ Download `zhulis.improved-logger.geode` from the [releases](https://github.com/Z
 | `n` `N`, `]` `[` | Next / previous warning, error or marker, next / previous group |
 | `t` | Time: clock, since the log before, since the group's start, since the marker above |
 | `M` | Only what came after the last marker |
-| `Shift+R` | Restart the game, a banner says when a `.geode` was rebuilt (a click on it works too) |
+| `Shift+R` | Restart the game, a banner says when a mod's `.geode` changed: rebuilt or updated (a click on it works too) |
 | `o` | The crash log of the last session (or a click on its banner) |
 | `P` | The mods Geode couldn't load, and why |
 | `L` | An older log file of Geode |
