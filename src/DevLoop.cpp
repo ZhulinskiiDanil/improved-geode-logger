@@ -191,6 +191,16 @@ namespace devloop
     s_problems.clear();
   }
 
+  // A notification needs a running scene; during a scene transition there may be none yet
+  static void showToastWhenSceneReady(std::string text, int severity)
+  {
+    Loader::get()->queueInMainThread([text = std::move(text), severity]() mutable
+                                     {
+      if (!CCScene::get())
+        return showToastWhenSceneReady(std::move(text), severity);
+      Notification::create(text, severity >= Severity::Error ? NotificationIcon::Error : NotificationIcon::Warning, NOTIFICATION_LONG_TIME)->show(); });
+  }
+
   void toast(std::string const& mod, int severity, std::string_view message)
   {
     if (!s_gameLoaded && mod == "Geode")
@@ -216,8 +226,7 @@ namespace devloop
       s_skippedToasts = 0;
     }
 
-    Loader::get()->queueInMainThread([text = std::move(text), severity]
-                                     { Notification::create(text, severity >= Severity::Error ? NotificationIcon::Error : NotificationIcon::Warning, NOTIFICATION_LONG_TIME)->show(); });
+    showToastWhenSceneReady(std::move(text), severity);
   }
 
   void restart()
